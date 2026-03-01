@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+	BUILT_IN_TOOL_OVERRIDE_NAMES,
 	DEFAULT_TOOL_DISPLAY_CONFIG,
 	type ConfigLoadResult,
 	type ConfigSaveResult,
@@ -10,10 +11,15 @@ import {
 	READ_OUTPUT_MODES,
 	SEARCH_OUTPUT_MODES,
 	type ToolDisplayConfig,
+	type ToolOverrideOwnership,
 } from "./types.js";
 
 const CONFIG_DIR = join(homedir(), ".pi", "agent", "extensions", "pi-tool-display");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+
+interface LegacyToolDisplayConfigSource extends Partial<ToolDisplayConfig> {
+	registerReadToolOverride?: unknown;
+}
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
 	if (typeof value !== "number" || Number.isNaN(value)) {
@@ -27,6 +33,13 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 
 function toBoolean(value: unknown, fallback: boolean): boolean {
 	return typeof value === "boolean" ? value : fallback;
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return {};
+	}
+	return value as Record<string, unknown>;
 }
 
 function toReadOutputMode(value: unknown): ToolDisplayConfig["readOutputMode"] {
@@ -58,10 +71,39 @@ function toDiffViewMode(value: unknown): ToolDisplayConfig["diffViewMode"] {
 		: DEFAULT_TOOL_DISPLAY_CONFIG.diffViewMode;
 }
 
+function cloneDefaultConfig(): ToolDisplayConfig {
+	return {
+		...DEFAULT_TOOL_DISPLAY_CONFIG,
+		registerToolOverrides: { ...DEFAULT_TOOL_DISPLAY_CONFIG.registerToolOverrides },
+	};
+}
+
+function normalizeToolOverrideOwnership(
+	rawOverrides: unknown,
+	legacyRegisterReadToolOverride: unknown,
+): ToolOverrideOwnership {
+	const source = toRecord(rawOverrides);
+	const defaults = DEFAULT_TOOL_DISPLAY_CONFIG.registerToolOverrides;
+	const legacyReadDefault = toBoolean(legacyRegisterReadToolOverride, defaults.read);
+
+	const overrides = { ...defaults };
+	for (const toolName of BUILT_IN_TOOL_OVERRIDE_NAMES) {
+		const fallback = toolName === "read" ? legacyReadDefault : defaults[toolName];
+		overrides[toolName] = toBoolean(source[toolName], fallback);
+	}
+
+	return overrides;
+}
+
 export function normalizeToolDisplayConfig(raw: unknown): ToolDisplayConfig {
-	const source = typeof raw === "object" && raw !== null ? (raw as Partial<ToolDisplayConfig>) : {};
+	const source =
+		typeof raw === "object" && raw !== null ? (raw as LegacyToolDisplayConfigSource) : ({} as LegacyToolDisplayConfigSource);
 
 	return {
+		registerToolOverrides: normalizeToolOverrideOwnership(
+			source.registerToolOverrides,
+			source.registerReadToolOverride,
+		),
 		readOutputMode: toReadOutputMode(source.readOutputMode),
 		searchOutputMode: toSearchOutputMode(source.searchOutputMode),
 		mcpOutputMode: toMcpOutputMode(source.mcpOutputMode),
@@ -87,7 +129,7 @@ export function normalizeToolDisplayConfig(raw: unknown): ToolDisplayConfig {
 
 export function loadToolDisplayConfig(): ConfigLoadResult {
 	if (!existsSync(CONFIG_FILE)) {
-		return { config: { ...DEFAULT_TOOL_DISPLAY_CONFIG } };
+		return { config: cloneDefaultConfig() };
 	}
 
 	try {
@@ -97,7 +139,7 @@ export function loadToolDisplayConfig(): ConfigLoadResult {
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		return {
-			config: { ...DEFAULT_TOOL_DISPLAY_CONFIG },
+			config: cloneDefaultConfig(),
 			error: `Failed to parse ${CONFIG_FILE}: ${message}`,
 		};
 	}

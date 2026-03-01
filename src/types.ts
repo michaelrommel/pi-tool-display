@@ -8,7 +8,30 @@ export type SearchOutputMode = (typeof SEARCH_OUTPUT_MODES)[number];
 export type McpOutputMode = (typeof MCP_OUTPUT_MODES)[number];
 export type DiffViewMode = (typeof DIFF_VIEW_MODES)[number];
 
+export const BUILT_IN_TOOL_OVERRIDE_NAMES = [
+	"read",
+	"grep",
+	"find",
+	"ls",
+	"bash",
+	"edit",
+	"write",
+] as const;
+
+export type BuiltInToolOverrideName = (typeof BUILT_IN_TOOL_OVERRIDE_NAMES)[number];
+
+export interface ToolOverrideOwnership {
+	read: boolean;
+	grep: boolean;
+	find: boolean;
+	ls: boolean;
+	bash: boolean;
+	edit: boolean;
+	write: boolean;
+}
+
 export interface ToolDisplayConfig {
+	registerToolOverrides: ToolOverrideOwnership;
 	readOutputMode: ReadOutputMode;
 	searchOutputMode: SearchOutputMode;
 	mcpOutputMode: McpOutputMode;
@@ -24,6 +47,15 @@ export interface ToolDisplayConfig {
 }
 
 export const DEFAULT_TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
+	registerToolOverrides: {
+		read: true,
+		grep: true,
+		find: true,
+		ls: true,
+		bash: true,
+		edit: true,
+		write: true,
+	},
 	readOutputMode: "hidden",
 	searchOutputMode: "hidden",
 	mcpOutputMode: "hidden",

@@ -34,7 +34,10 @@ import {
   splitLines,
 } from "./render-utils.js";
 import { renderEditDiffResult, renderWriteDiffResult } from "./diff-renderer.js";
-import type { ToolDisplayConfig } from "./types.js";
+import type {
+  BuiltInToolOverrideName,
+  ToolDisplayConfig,
+} from "./types.js";
 
 interface BuiltInTools {
   read: ReturnType<typeof createReadTool>;
@@ -644,75 +647,87 @@ export function registerToolDisplayOverrides(
   let lastWriteWasOverwrite = false;
   let lastBashCommand: string | undefined;
 
-  pi.registerTool({
-    name: "read",
-    label: "read",
-    description: bootstrapTools.read.description,
-    parameters: bootstrapTools.read.parameters,
-    async execute(toolCallId, params, signal, onUpdate, ctx) {
-      return getBuiltInTools(ctx.cwd).read.execute(
-        toolCallId,
-        params,
-        signal,
-        onUpdate,
-      );
-    },
-    renderCall(args, theme) {
-      const path = shortenPath(args.path);
-      let suffix = "";
-      if (args.offset !== undefined || args.limit !== undefined) {
-        const from = args.offset ?? 1;
-        const to = args.limit !== undefined ? from + args.limit - 1 : undefined;
-        suffix = to ? `:${from}-${to}` : `:${from}`;
-      }
-      const line = `${theme.fg("toolTitle", theme.bold("read"))} ${theme.fg("accent", path || "...")}${theme.fg("warning", suffix)}`;
-      return new Text(line, 0, 0);
-    },
-    renderResult(result, options, theme) {
-      if (options.isPartial) {
-        return new Text(theme.fg("warning", "reading..."), 0, 0);
-      }
+  const registerIfOwned = (
+    toolName: BuiltInToolOverrideName,
+    register: () => void,
+  ): void => {
+    if (getConfig().registerToolOverrides[toolName]) {
+      register();
+    }
+  };
 
-
-      const config = getConfig();
-      if (config.readOutputMode === "hidden") {
-        return new Text("", 0, 0);
-      }
-
-      const details = result.details as ReadToolDetails | undefined;
-      const rawOutput = extractTextOutput(result);
-      const lines = prepareOutputLines(rawOutput, options);
-
-      if (config.readOutputMode === "summary") {
-        const summaryLines = compactOutputLines(splitLines(rawOutput), {
-          expanded: true,
-        });
-        let summary = formatReadSummary(summaryLines, details, theme);
-        if (config.showTruncationHints) {
-          summary += formatRtkSummarySuffix(result.details, config, theme);
+  registerIfOwned("read", () => {
+    pi.registerTool({
+      name: "read",
+      label: "read",
+      description: bootstrapTools.read.description,
+      parameters: bootstrapTools.read.parameters,
+      async execute(toolCallId, params, signal, onUpdate, ctx) {
+        return getBuiltInTools(ctx.cwd).read.execute(
+          toolCallId,
+          params,
+          signal,
+          onUpdate,
+        );
+      },
+      renderCall(args, theme) {
+        const path = shortenPath(args.path);
+        let suffix = "";
+        if (args.offset !== undefined || args.limit !== undefined) {
+          const from = args.offset ?? 1;
+          const to =
+            args.limit !== undefined ? from + args.limit - 1 : undefined;
+          suffix = to ? `:${from}-${to}` : `:${from}`;
         }
-        return new Text(summary, 0, 0);
-      }
+        const line = `${theme.fg("toolTitle", theme.bold("read"))} ${theme.fg("accent", path || "...")}${theme.fg("warning", suffix)}`;
+        return new Text(line, 0, 0);
+      },
+      renderResult(result, options, theme) {
+        if (options.isPartial) {
+          return new Text(theme.fg("warning", "reading..."), 0, 0);
+        }
 
-      const maxLines = options.expanded
-        ? getExpandedPreviewLineLimit(lines, config)
-        : config.previewLines;
-      let preview = buildPreviewText(lines, maxLines, theme, options.expanded);
-      if (config.showTruncationHints && details?.truncation?.truncated) {
-        preview += `\n${theme.fg("warning", "(truncated by backend limits)")}`;
-      }
-      if (config.showTruncationHints) {
-        preview += formatRtkPreviewHint(result.details, config, theme);
-      }
-      if (options.expanded) {
-        preview += formatExpandedPreviewCapHint(lines, config, theme);
-      }
-      return new Text(preview, 0, 0);
-    },
+        const config = getConfig();
+        if (config.readOutputMode === "hidden") {
+          return new Text("", 0, 0);
+        }
+
+        const details = result.details as ReadToolDetails | undefined;
+        const rawOutput = extractTextOutput(result);
+        const lines = prepareOutputLines(rawOutput, options);
+
+        if (config.readOutputMode === "summary") {
+          const summaryLines = compactOutputLines(splitLines(rawOutput), {
+            expanded: true,
+          });
+          let summary = formatReadSummary(summaryLines, details, theme);
+          if (config.showTruncationHints) {
+            summary += formatRtkSummarySuffix(result.details, config, theme);
+          }
+          return new Text(summary, 0, 0);
+        }
+
+        const maxLines = options.expanded
+          ? getExpandedPreviewLineLimit(lines, config)
+          : config.previewLines;
+        let preview = buildPreviewText(lines, maxLines, theme, options.expanded);
+        if (config.showTruncationHints && details?.truncation?.truncated) {
+          preview += `\n${theme.fg("warning", "(truncated by backend limits)")}`;
+        }
+        if (config.showTruncationHints) {
+          preview += formatRtkPreviewHint(result.details, config, theme);
+        }
+        if (options.expanded) {
+          preview += formatExpandedPreviewCapHint(lines, config, theme);
+        }
+        return new Text(preview, 0, 0);
+      },
+    });
   });
 
-  pi.registerTool({
-    name: "grep",
+  registerIfOwned("grep", () => {
+    pi.registerTool({
+      name: "grep",
     label: "grep",
     description: bootstrapTools.grep.description,
     parameters: bootstrapTools.grep.parameters,
@@ -744,10 +759,12 @@ export function registerToolDisplayOverrides(
         details,
       );
     },
+    });
   });
 
-  pi.registerTool({
-    name: "find",
+  registerIfOwned("find", () => {
+    pi.registerTool({
+      name: "find",
     label: "find",
     description: bootstrapTools.find.description,
     parameters: bootstrapTools.find.parameters,
@@ -778,10 +795,12 @@ export function registerToolDisplayOverrides(
         details,
       );
     },
+    });
   });
 
-  pi.registerTool({
-    name: "ls",
+  registerIfOwned("ls", () => {
+    pi.registerTool({
+      name: "ls",
     label: "ls",
     description: bootstrapTools.ls.description,
     parameters: bootstrapTools.ls.parameters,
@@ -812,10 +831,12 @@ export function registerToolDisplayOverrides(
         details,
       );
     },
+    });
   });
 
-  pi.registerTool({
-    name: "edit",
+  registerIfOwned("edit", () => {
+    pi.registerTool({
+      name: "edit",
     label: "edit",
     description: bootstrapTools.edit.description,
     parameters: bootstrapTools.edit.parameters,
@@ -865,10 +886,12 @@ export function registerToolDisplayOverrides(
         fallbackText,
       );
     },
+    });
   });
 
-  pi.registerTool({
-    name: "write",
+  registerIfOwned("write", () => {
+    pi.registerTool({
+      name: "write",
     label: "write",
     description: bootstrapTools.write.description,
     parameters: bootstrapTools.write.parameters,
@@ -953,10 +976,12 @@ export function registerToolDisplayOverrides(
         fallbackText,
       );
     },
+    });
   });
 
-  pi.registerTool({
-    name: "bash",
+  registerIfOwned("bash", () => {
+    pi.registerTool({
+      name: "bash",
     label: "bash",
     description: bootstrapTools.bash.description,
     parameters: bootstrapTools.bash.parameters,
@@ -1018,6 +1043,7 @@ export function registerToolDisplayOverrides(
       }
       return new Text(text, 0, 0);
     },
+    });
   });
 
   const wrappedMcpToolNames = new Set<string>();

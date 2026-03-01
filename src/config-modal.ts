@@ -8,7 +8,11 @@ import {
 	TOOL_DISPLAY_PRESETS,
 	type ToolDisplayPreset,
 } from "./presets.js";
-import { type ToolDisplayConfig } from "./types.js";
+import {
+	BUILT_IN_TOOL_OVERRIDE_NAMES,
+	type BuiltInToolOverrideName,
+	type ToolDisplayConfig,
+} from "./types.js";
 
 interface ToolDisplayConfigController {
 	getConfig(): ToolDisplayConfig;
@@ -26,18 +30,87 @@ const DIFF_SPLIT_MIN_WIDTH_VALUES = ["90", "100", "120", "140", "160"];
 const DIFF_COLLAPSED_LINE_VALUES = ["8", "16", "24", "40", "80"];
 const PRESET_COMMAND_HINT = TOOL_DISPLAY_PRESETS.join("|");
 
+const TOOL_OVERRIDE_SETTING_IDS: Record<BuiltInToolOverrideName, string> = {
+	read: "registerToolOverrides.read",
+	grep: "registerToolOverrides.grep",
+	find: "registerToolOverrides.find",
+	ls: "registerToolOverrides.ls",
+	bash: "registerToolOverrides.bash",
+	edit: "registerToolOverrides.edit",
+	write: "registerToolOverrides.write",
+};
+
 function toOnOff(value: boolean): string {
 	return value ? "on" : "off";
 }
 
+function toolOwnershipSummary(config: ToolDisplayConfig): string {
+	const overrides = config.registerToolOverrides;
+	return `read:${toOnOff(overrides.read)},grep:${toOnOff(overrides.grep)},find:${toOnOff(overrides.find)},ls:${toOnOff(overrides.ls)},bash:${toOnOff(overrides.bash)},edit:${toOnOff(overrides.edit)},write:${toOnOff(overrides.write)}`;
+}
+
 function summarizeConfig(config: ToolDisplayConfig): string {
 	const preset = detectToolDisplayPreset(config);
-	return `preset=${preset}, read=${config.readOutputMode}, search=${config.searchOutputMode}, mcp=${config.mcpOutputMode}, preview=${config.previewLines}, expandedMax=${config.expandedPreviewMaxLines}, bash=${config.bashCollapsedLines}, diff=${config.diffViewMode}@${config.diffSplitMinWidth}, diffLines=${config.diffCollapsedLines}, diffWrap=${toOnOff(config.diffWordWrap)}, rtkHints=${toOnOff(config.showRtkCompactionHints)}`;
+	return `preset=${preset}, owners={${toolOwnershipSummary(config)}}, read=${config.readOutputMode}, search=${config.searchOutputMode}, mcp=${config.mcpOutputMode}, preview=${config.previewLines}, expandedMax=${config.expandedPreviewMaxLines}, bash=${config.bashCollapsedLines}, diff=${config.diffViewMode}@${config.diffSplitMinWidth}, diffLines=${config.diffCollapsedLines}, diffWrap=${toOnOff(config.diffWordWrap)}, rtkHints=${toOnOff(config.showRtkCompactionHints)}`;
 }
 
 function parseNumber(value: string, fallback: number): number {
 	const parsed = Number.parseInt(value, 10);
 	return Number.isNaN(parsed) ? fallback : parsed;
+}
+
+function buildToolOwnershipSettings(config: ToolDisplayConfig): SettingItem[] {
+	return [
+		{
+			id: TOOL_OVERRIDE_SETTING_IDS.read,
+			label: "Own read tool override",
+			description: "on = pi-tool-display owns read, off = leave read for another extension (applies after /reload)",
+			currentValue: toOnOff(config.registerToolOverrides.read),
+			values: ["on", "off"],
+		},
+		{
+			id: TOOL_OVERRIDE_SETTING_IDS.grep,
+			label: "Own grep tool override",
+			description: "on = pi-tool-display owns grep (applies after /reload)",
+			currentValue: toOnOff(config.registerToolOverrides.grep),
+			values: ["on", "off"],
+		},
+		{
+			id: TOOL_OVERRIDE_SETTING_IDS.find,
+			label: "Own find tool override",
+			description: "on = pi-tool-display owns find (applies after /reload)",
+			currentValue: toOnOff(config.registerToolOverrides.find),
+			values: ["on", "off"],
+		},
+		{
+			id: TOOL_OVERRIDE_SETTING_IDS.ls,
+			label: "Own ls tool override",
+			description: "on = pi-tool-display owns ls (applies after /reload)",
+			currentValue: toOnOff(config.registerToolOverrides.ls),
+			values: ["on", "off"],
+		},
+		{
+			id: TOOL_OVERRIDE_SETTING_IDS.bash,
+			label: "Own bash tool override",
+			description: "on = pi-tool-display owns bash (applies after /reload)",
+			currentValue: toOnOff(config.registerToolOverrides.bash),
+			values: ["on", "off"],
+		},
+		{
+			id: TOOL_OVERRIDE_SETTING_IDS.edit,
+			label: "Own edit tool override",
+			description: "on = pi-tool-display owns edit (applies after /reload)",
+			currentValue: toOnOff(config.registerToolOverrides.edit),
+			values: ["on", "off"],
+		},
+		{
+			id: TOOL_OVERRIDE_SETTING_IDS.write,
+			label: "Own write tool override",
+			description: "on = pi-tool-display owns write (applies after /reload)",
+			currentValue: toOnOff(config.registerToolOverrides.write),
+			values: ["on", "off"],
+		},
+	];
 }
 
 function buildSettingItems(config: ToolDisplayConfig): SettingItem[] {
@@ -49,6 +122,7 @@ function buildSettingItems(config: ToolDisplayConfig): SettingItem[] {
 			currentValue: detectToolDisplayPreset(config),
 			values: [...TOOL_DISPLAY_PRESETS],
 		},
+		...buildToolOwnershipSettings(config),
 		{
 			id: "readOutputMode",
 			label: "Read tool output",
@@ -140,6 +214,26 @@ function applyPreset(preset: ToolDisplayPreset): ToolDisplayConfig {
 	return getToolDisplayPresetConfig(preset);
 }
 
+function parseToolOverrideSettingId(id: string): BuiltInToolOverrideName | undefined {
+	for (const toolName of BUILT_IN_TOOL_OVERRIDE_NAMES) {
+		if (TOOL_OVERRIDE_SETTING_IDS[toolName] === id) {
+			return toolName;
+		}
+	}
+	return undefined;
+}
+
+function withToolOverride(config: ToolDisplayConfig, toolName: BuiltInToolOverrideName, enabled: boolean): ToolDisplayConfig {
+	const registerToolOverrides: ToolDisplayConfig["registerToolOverrides"] = {
+		...config.registerToolOverrides,
+		[toolName]: enabled,
+	};
+	return {
+		...config,
+		registerToolOverrides,
+	};
+}
+
 function applySetting(config: ToolDisplayConfig, id: string, value: string): ToolDisplayConfig {
 	switch (id) {
 		case "preset": {
@@ -206,13 +300,21 @@ function applySetting(config: ToolDisplayConfig, id: string, value: string): Too
 				...config,
 				showRtkCompactionHints: value === "on",
 			};
-		default:
+		default: {
+			const toolName = parseToolOverrideSettingId(id);
+			if (toolName) {
+				return withToolOverride(config, toolName, value === "on");
+			}
 			return config;
+		}
 	}
 }
 
 function syncSettingValues(settingsList: SettingValueSyncTarget, config: ToolDisplayConfig): void {
 	settingsList.updateValue("preset", detectToolDisplayPreset(config));
+	for (const toolName of BUILT_IN_TOOL_OVERRIDE_NAMES) {
+		settingsList.updateValue(TOOL_OVERRIDE_SETTING_IDS[toolName], toOnOff(config.registerToolOverrides[toolName]));
+	}
 	settingsList.updateValue("readOutputMode", config.readOutputMode);
 	settingsList.updateValue("searchOutputMode", config.searchOutputMode);
 	settingsList.updateValue("mcpOutputMode", config.mcpOutputMode);
@@ -320,7 +422,6 @@ function handleToolDisplayArgs(args: string, ctx: ExtensionCommandContext, contr
 		ctx.ui.notify(`Tool display preset set to ${preset}.`, "info");
 		return true;
 	}
-
 
 	ctx.ui.notify(`Usage: /tool-display [show|reset|preset ${PRESET_COMMAND_HINT}]`, "warning");
 	return true;

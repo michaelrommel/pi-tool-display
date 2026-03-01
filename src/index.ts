@@ -10,7 +10,10 @@ import {
 import { registerToolDisplayCommand } from "./config-modal.js";
 import { registerToolDisplayOverrides } from "./tool-overrides.js";
 import registerNativeUserMessageBox from "./user-message-box-native.js";
-import type { ToolDisplayConfig } from "./types.js";
+import {
+  BUILT_IN_TOOL_OVERRIDE_NAMES,
+  type ToolDisplayConfig,
+} from "./types.js";
 
 export default function toolDisplayExtension(pi: ExtensionAPI): void {
   const initial = loadToolDisplayConfig();
@@ -24,11 +27,23 @@ export default function toolDisplayExtension(pi: ExtensionAPI): void {
     ctx: ExtensionCommandContext,
   ): void => {
     const normalized = normalizeToolDisplayConfig(next);
+    const requiresReload = BUILT_IN_TOOL_OVERRIDE_NAMES.some(
+      (toolName) =>
+        config.registerToolOverrides[toolName] !==
+        normalized.registerToolOverrides[toolName],
+    );
     config = normalized;
 
     const saved = saveToolDisplayConfig(normalized);
     if (!saved.success && saved.error) {
       ctx.ui.notify(saved.error, "error");
+    }
+
+    if (requiresReload) {
+      ctx.ui.notify(
+        "Tool ownership updates apply after /reload.",
+        "warning",
+      );
     }
   };
 
