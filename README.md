@@ -27,7 +27,7 @@ Place this folder in:
 
 Pi auto-discovers this location. If you keep it elsewhere, add the path to your settings `extensions` array.
 
-### As a package (after publishing)
+### As an npm package
 
 ```bash
 pi install npm:pi-tool-display
