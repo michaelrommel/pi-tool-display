@@ -14,6 +14,7 @@ import {
 } from "./capabilities.js";
 import { registerToolDisplayCommand } from "./config-modal.js";
 import { registerToolDisplayOverrides } from "./tool-overrides.js";
+import { registerThinkingLabeling } from "./thinking-label.js";
 import registerNativeUserMessageBox from "./user-message-box-native.js";
 import {
   BUILT_IN_TOOL_OVERRIDE_NAMES,
@@ -73,6 +74,7 @@ export default function toolDisplayExtension(pi: ExtensionAPI): void {
   registerToolDisplayOverrides(pi, getEffectiveConfig);
   registerNativeUserMessageBox(pi, getConfig);
   registerToolDisplayCommand(pi, { getConfig, setConfig, getCapabilities });
+  registerThinkingLabeling(pi);
 
   pi.on("session_start", async (_event, ctx) => {
     refreshCapabilities();
