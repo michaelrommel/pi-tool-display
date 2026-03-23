@@ -34,6 +34,12 @@ import {
   splitLines,
 } from "./render-utils.js";
 import { renderEditDiffResult, renderWriteDiffResult } from "./diff-renderer.js";
+import {
+  extractPromptMetadata,
+  getTextField,
+  isMcpToolCandidate,
+  toRecord,
+} from "./tool-metadata.js";
 import type {
   BuiltInToolOverrideName,
   ToolDisplayConfig,
@@ -71,6 +77,36 @@ interface RtkCompactionInfo {
 
 const builtInToolCache = new Map<string, BuiltInTools>();
 const RTK_COMPACTION_LABEL = "compacted by RTK";
+
+function cloneToolParameters<T>(parameters: T, seen = new WeakMap<object, unknown>()): T {
+  if (parameters === null || typeof parameters !== "object") {
+    return parameters;
+  }
+
+  if (seen.has(parameters)) {
+    return seen.get(parameters) as T;
+  }
+
+  const clone = Array.isArray(parameters)
+    ? []
+    : Object.create(Object.getPrototypeOf(parameters));
+  seen.set(parameters, clone);
+
+  for (const key of Reflect.ownKeys(parameters)) {
+    const descriptor = Object.getOwnPropertyDescriptor(parameters, key);
+    if (!descriptor) {
+      continue;
+    }
+
+    if ("value" in descriptor) {
+      descriptor.value = cloneToolParameters(descriptor.value, seen);
+    }
+
+    Object.defineProperty(clone, key, descriptor);
+  }
+
+  return clone as T;
+}
 
 function getBuiltInTools(cwd: string): BuiltInTools {
   let tools = builtInToolCache.get(cwd);
@@ -370,13 +406,17 @@ function formatReadSummary(
   lines: string[],
   details: ReadToolDetails | undefined,
   theme: RenderTheme,
+  showTruncationHints: boolean,
 ): string {
   const lineCount = lines.length;
   let summary = theme.fg(
     "muted",
     `↳ loaded ${lineCount} ${pluralize(lineCount, "line")}`,
   );
-  summary += theme.fg("warning", truncationHint(details));
+  summary += theme.fg(
+    "warning",
+    showTruncationHints ? truncationHint(details) : "",
+  );
   return summary;
 }
 
@@ -385,13 +425,18 @@ function formatSearchSummary(
   unitLabel: string,
   details: { truncation?: { truncated?: boolean } } | undefined,
   theme: RenderTheme,
+  showTruncationHints: boolean,
+  pluralLabel?: string,
 ): string {
   const count = countNonEmptyLines(lines);
   let summary = theme.fg(
     "muted",
-    `↳ ${count} ${pluralize(count, unitLabel)} returned`,
+    `↳ ${count} ${pluralize(count, unitLabel, pluralLabel)} returned`,
   );
-  summary += theme.fg("warning", truncationHint(details));
+  summary += theme.fg(
+    "warning",
+    showTruncationHints ? truncationHint(details) : "",
+  );
   return summary;
 }
 
@@ -426,6 +471,7 @@ function renderSearchResult(
   theme: RenderTheme,
   unitLabel: string,
   details: GrepToolDetails | FindToolDetails | LsToolDetails | undefined,
+  pluralLabel?: string,
 ): Text {
   if (options.isPartial) {
     return new Text(theme.fg("warning", "running..."), 0, 0);
@@ -438,10 +484,15 @@ function renderSearchResult(
   }
 
   if (config.searchOutputMode === "count") {
-    let summary = formatSearchSummary(lines, unitLabel, details, theme);
-    if (config.showTruncationHints) {
-      summary += formatRtkSummarySuffix(details, config, theme);
-    }
+    let summary = formatSearchSummary(
+      lines,
+      unitLabel,
+      details,
+      theme,
+      config.showTruncationHints,
+      pluralLabel,
+    );
+    summary += formatRtkSummarySuffix(details, config, theme);
     return new Text(summary, 0, 0);
   }
 
@@ -452,39 +503,11 @@ function renderSearchResult(
   if (config.showTruncationHints && details?.truncation?.truncated) {
     preview += `\n${theme.fg("warning", "(truncated by backend limits)")}`;
   }
-  if (config.showTruncationHints) {
-    preview += formatRtkPreviewHint(details, config, theme);
-  }
+  preview += formatRtkPreviewHint(details, config, theme);
   if (options.expanded) {
     preview += formatExpandedPreviewCapHint(lines, config, theme);
   }
   return new Text(preview, 0, 0);
-}
-
-function toRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  return value as Record<string, unknown>;
-}
-
-function getTextField(value: unknown, field: string): string | undefined {
-  const record = toRecord(value);
-  const raw = record[field];
-  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
-}
-
-function isMcpToolCandidate(tool: unknown): boolean {
-  const name = getTextField(tool, "name");
-  const label = getTextField(tool, "label");
-  if (name === "mcp") {
-    return true;
-  }
-  if (label?.startsWith("MCP ")) {
-    return true;
-  }
-  const description = getTextField(tool, "description");
-  return typeof description === "string" && /\bmcp\b/i.test(description);
 }
 
 function resolveMcpProxyCallTarget(args: Record<string, unknown>): string {
@@ -504,7 +527,7 @@ function resolveMcpProxyCallTarget(args: Record<string, unknown>): string {
     return server ? `describe ${describe} @${server}` : `describe ${describe}`;
   }
   if (search) {
-    return server ? `search \"${search}\" @${server}` : `search \"${search}\"`;
+    return server ? `search "${search}" @${server}` : `search "${search}"`;
   }
   if (server) {
     return `tools ${server}`;
@@ -518,7 +541,7 @@ function formatMcpCallLine(
   args: Record<string, unknown>,
   theme: RenderTheme,
 ): Text {
-  const argCount = Object.keys(args ?? {}).length;
+  const argCount = Object.keys(args).length;
   const argSuffix =
     argCount === 0
       ? theme.fg("muted", " (no args)")
@@ -586,9 +609,7 @@ function renderMcpResult(
     if (config.showTruncationHints && truncation.truncated) {
       summary += theme.fg("warning", " • truncated");
     }
-    if (config.showTruncationHints) {
-      summary += formatRtkSummarySuffix(result.details, config, theme);
-    }
+    summary += formatRtkSummarySuffix(result.details, config, theme);
     return new Text(summary, 0, 0);
   }
 
@@ -610,9 +631,7 @@ function renderMcpResult(
     preview += `\n${theme.fg("warning", `(${hints.join(" • ")})`)}`;
   }
 
-  if (config.showTruncationHints) {
-    preview += formatRtkPreviewHint(result.details, config, theme);
-  }
+  preview += formatRtkPreviewHint(result.details, config, theme);
   if (options.expanded) {
     preview += formatExpandedPreviewCapHint(lines, config, theme);
   }
@@ -625,6 +644,24 @@ export function registerToolDisplayOverrides(
   getConfig: ConfigGetter,
 ): void {
   const bootstrapTools = getBuiltInTools(process.cwd());
+  const builtInPromptMetadata = {
+    read: extractPromptMetadata(bootstrapTools.read),
+    grep: extractPromptMetadata(bootstrapTools.grep),
+    find: extractPromptMetadata(bootstrapTools.find),
+    ls: extractPromptMetadata(bootstrapTools.ls),
+    bash: extractPromptMetadata(bootstrapTools.bash),
+    edit: extractPromptMetadata(bootstrapTools.edit),
+    write: extractPromptMetadata(bootstrapTools.write),
+  };
+  const clonedParameters = {
+    read: cloneToolParameters(bootstrapTools.read.parameters),
+    grep: cloneToolParameters(bootstrapTools.grep.parameters),
+    find: cloneToolParameters(bootstrapTools.find.parameters),
+    ls: cloneToolParameters(bootstrapTools.ls.parameters),
+    bash: cloneToolParameters(bootstrapTools.bash.parameters),
+    edit: cloneToolParameters(bootstrapTools.edit.parameters),
+    write: cloneToolParameters(bootstrapTools.write.parameters),
+  };
   let lastEditPath: string | undefined;
   let lastEditLineCount = 0;
   let lastWritePath: string | undefined;
@@ -649,7 +686,8 @@ export function registerToolDisplayOverrides(
       name: "read",
       label: "read",
       description: bootstrapTools.read.description,
-      parameters: bootstrapTools.read.parameters,
+      ...builtInPromptMetadata.read,
+      parameters: clonedParameters.read,
       async execute(toolCallId, params, signal, onUpdate, ctx) {
         return getBuiltInTools(ctx.cwd).read.execute(
           toolCallId,
@@ -688,10 +726,13 @@ export function registerToolDisplayOverrides(
           const summaryLines = compactOutputLines(splitLines(rawOutput), {
             expanded: true,
           });
-          let summary = formatReadSummary(summaryLines, details, theme);
-          if (config.showTruncationHints) {
-            summary += formatRtkSummarySuffix(result.details, config, theme);
-          }
+          let summary = formatReadSummary(
+            summaryLines,
+            details,
+            theme,
+            config.showTruncationHints,
+          );
+          summary += formatRtkSummarySuffix(result.details, config, theme);
           return new Text(summary, 0, 0);
         }
 
@@ -702,9 +743,7 @@ export function registerToolDisplayOverrides(
         if (config.showTruncationHints && details?.truncation?.truncated) {
           preview += `\n${theme.fg("warning", "(truncated by backend limits)")}`;
         }
-        if (config.showTruncationHints) {
-          preview += formatRtkPreviewHint(result.details, config, theme);
-        }
+        preview += formatRtkPreviewHint(result.details, config, theme);
         if (options.expanded) {
           preview += formatExpandedPreviewCapHint(lines, config, theme);
         }
@@ -718,7 +757,8 @@ export function registerToolDisplayOverrides(
       name: "grep",
     label: "grep",
     description: bootstrapTools.grep.description,
-    parameters: bootstrapTools.grep.parameters,
+    ...builtInPromptMetadata.grep,
+    parameters: clonedParameters.grep,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       return getBuiltInTools(ctx.cwd).grep.execute(
         toolCallId,
@@ -745,6 +785,7 @@ export function registerToolDisplayOverrides(
         theme,
         "match",
         details,
+        "matches",
       );
     },
     });
@@ -755,7 +796,8 @@ export function registerToolDisplayOverrides(
       name: "find",
     label: "find",
     description: bootstrapTools.find.description,
-    parameters: bootstrapTools.find.parameters,
+    ...builtInPromptMetadata.find,
+    parameters: clonedParameters.find,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       return getBuiltInTools(ctx.cwd).find.execute(
         toolCallId,
@@ -791,7 +833,8 @@ export function registerToolDisplayOverrides(
       name: "ls",
     label: "ls",
     description: bootstrapTools.ls.description,
-    parameters: bootstrapTools.ls.parameters,
+    ...builtInPromptMetadata.ls,
+    parameters: clonedParameters.ls,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       return getBuiltInTools(ctx.cwd).ls.execute(
         toolCallId,
@@ -817,6 +860,7 @@ export function registerToolDisplayOverrides(
         theme,
         "entry",
         details,
+        "entries",
       );
     },
     });
@@ -827,7 +871,8 @@ export function registerToolDisplayOverrides(
       name: "edit",
     label: "edit",
     description: bootstrapTools.edit.description,
-    parameters: bootstrapTools.edit.parameters,
+    ...builtInPromptMetadata.edit,
+    parameters: clonedParameters.edit,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       lastEditPath = typeof params.path === "string" ? params.path : lastEditPath;
       lastEditLineCount = countTextLines(params.newText);
@@ -882,7 +927,8 @@ export function registerToolDisplayOverrides(
       name: "write",
     label: "write",
     description: bootstrapTools.write.description,
-    parameters: bootstrapTools.write.parameters,
+    ...builtInPromptMetadata.write,
+    parameters: clonedParameters.write,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       lastWritePath =
         typeof params.path === "string" ? params.path : lastWritePath;
@@ -975,7 +1021,8 @@ export function registerToolDisplayOverrides(
       name: "bash",
     label: "bash",
     description: bootstrapTools.bash.description,
-    parameters: bootstrapTools.bash.parameters,
+    ...builtInPromptMetadata.bash,
+    parameters: clonedParameters.bash,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       return getBuiltInTools(ctx.cwd).bash.execute(
         toolCallId,
@@ -1063,9 +1110,7 @@ export function registerToolDisplayOverrides(
         continue;
       }
 
-      const executeDelegate = executeCandidate as (
-        ...args: unknown[]
-      ) => unknown;
+      const executeDelegate = executeCandidate as (...args: unknown[]) => unknown;
       const toolLabel =
         getTextField(candidate, "label") ||
         (toolName === "mcp" ? "MCP Proxy" : `MCP ${toolName}`);
