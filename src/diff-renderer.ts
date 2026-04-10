@@ -1,18 +1,28 @@
-import { Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@mariozechner/pi-tui";
-import { getLanguageFromPath, highlightCode, type EditToolDetails } from "@mariozechner/pi-coding-agent";
+import {
+	Text,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+	type Component
+} from '@mariozechner/pi-tui';
+import {
+	getLanguageFromPath,
+	highlightCode,
+	type EditToolDetails
+} from '@mariozechner/pi-coding-agent';
 import {
 	buildCollapsedDiffHintText,
 	clampRenderedLineToWidth,
-	clampRenderedLinesToWidth,
-} from "./line-width-safety.js";
+	clampRenderedLinesToWidth
+} from './line-width-safety.js';
 import {
 	buildDiffSummaryText,
 	normalizeDiffRenderWidth,
 	resolveDiffPresentationMode,
-	type DiffPresentationMode,
-} from "./diff-presentation.js";
-import { pluralize, sanitizeAnsiForThemedOutput } from "./render-utils.js";
-import type { ToolDisplayConfig } from "./types.js";
+	type DiffPresentationMode
+} from './diff-presentation.js';
+import { pluralize, sanitizeAnsiForThemedOutput } from './render-utils.js';
+import type { ToolDisplayConfig } from './types.js';
 
 interface DiffTheme {
 	fg(color: string, text: string): string;
@@ -21,11 +31,11 @@ interface DiffTheme {
 	getBgAnsi?(color: string): string;
 }
 
-type DiffLineKind = "add" | "remove" | "context";
-type DiffEntryKind = "line" | "meta" | "hunk" | "file";
+type DiffLineKind = 'add' | 'remove' | 'context';
+type DiffEntryKind = 'line' | 'meta' | 'hunk' | 'file';
 
 interface DiffLineEntry {
-	kind: "line";
+	kind: 'line';
 	lineKind: DiffLineKind;
 	oldLineNumber: number | null;
 	newLineNumber: number | null;
@@ -36,7 +46,7 @@ interface DiffLineEntry {
 }
 
 interface DiffMetaEntry {
-	kind: Exclude<DiffEntryKind, "line">;
+	kind: Exclude<DiffEntryKind, 'line'>;
 	raw: string;
 	hunkIndex: number;
 }
@@ -98,8 +108,9 @@ type CodeLineHighlighter = (line: string) => string;
 
 const CANONICAL_LINE_PATTERN = /^([+\- ])(\s*\d+)\|(.*)$/;
 const LEGACY_LINE_PATTERN = /^([+\- ])(\s*\d+)\s(.*)$/;
-const HUNK_HEADER_PATTERN = /^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@(.*)$/;
-const SPLIT_SEPARATOR = " │ ";
+const HUNK_HEADER_PATTERN =
+	/^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@(.*)$/;
+const SPLIT_SEPARATOR = ' │ ';
 const MIN_LINE_NUMBER_WIDTH = 2;
 const MIN_SPLIT_COLUMN_WIDTH = 24;
 const MAX_INLINE_DIFF_LINE_LENGTH = 700;
@@ -109,28 +120,33 @@ const ADD_INLINE_EMPHASIS_MIX_RATIO = 0.26;
 const REMOVE_INLINE_EMPHASIS_MIX_RATIO = 0.26;
 const ADDITION_TINT_TARGET: RgbColor = { r: 84, g: 190, b: 118 };
 const DELETION_TINT_TARGET: RgbColor = { r: 232, g: 95, b: 122 };
-const ANSI_BG_RESET = "\x1b[49m";
+const ANSI_BG_RESET = '\x1b[49m';
 const ANSI_SGR_PATTERN = /\x1b\[([0-9;]*)m/g;
 const STYLE_RESET_PARAMS = [39, 22, 23, 24, 25, 27, 28, 29, 59] as const;
 const DIFF_WIDTH_OPS = {
 	measure: visibleWidth,
-	truncate: (text: string, maxWidth: number): string => truncateToWidth(text, maxWidth, ""),
+	truncate: (text: string, maxWidth: number): string =>
+		truncateToWidth(text, maxWidth, '')
 };
 
 function clampDiffLineToWidth(text: string, width: number): string {
-	return stabilizeBackgroundResets(clampRenderedLineToWidth(text, width, DIFF_WIDTH_OPS));
+	return stabilizeBackgroundResets(
+		clampRenderedLineToWidth(text, width, DIFF_WIDTH_OPS)
+	);
 }
 
 function clampDiffLinesToWidth(lines: string[], width: number): string[] {
-	return clampRenderedLinesToWidth(lines, width, DIFF_WIDTH_OPS).map((line) => stabilizeBackgroundResets(line));
+	return clampRenderedLinesToWidth(lines, width, DIFF_WIDTH_OPS).map((line) =>
+		stabilizeBackgroundResets(line)
+	);
 }
 
 function normalizeCodeWhitespace(text: string): string {
-	return text.replace(/\t/g, "    ");
+	return text.replace(/\t/g, '    ');
 }
 
 function emphasis(theme: DiffTheme, text: string): string {
-	return typeof theme.bold === "function" ? theme.bold(text) : text;
+	return typeof theme.bold === 'function' ? theme.bold(text) : text;
 }
 
 function toSgrParams(rawParams: string): number[] {
@@ -139,7 +155,7 @@ function toSgrParams(rawParams: string): number[] {
 	}
 
 	const parsed = rawParams
-		.split(";")
+		.split(';')
 		.map((token) => Number.parseInt(token, 10))
 		.filter((value) => Number.isFinite(value));
 
@@ -147,12 +163,32 @@ function toSgrParams(rawParams: string): number[] {
 }
 
 function sequenceResetsBackground(params: number[]): boolean {
-	for (const param of params) {
+	let i = 0;
+
+	while (i < params.length) {
+		const param = params[i];
+
+		// Check for single-value matches first
 		if (param === 0 || param === 49) {
 			return true;
 		}
-	}
 
+		// Handle color mode parameters
+		if (param === 38 || param === 48) {
+			i++; // Move to next parameter
+			if (i >= params.length) break;
+			const nextParam = params[i];
+			if (nextParam === 5) {
+				// 256 color mode - swallow one more number
+				i++;
+			} else if (nextParam === 2) {
+				// RGB true color - swallow three more numbers
+				i += 3;
+			}
+		}
+
+		i++;
+	}
 	return false;
 }
 
@@ -175,7 +211,7 @@ function stripBackgroundResetParams(params: number[]): number[] {
 			const colorMode = params[index + 1];
 			if (colorMode === 5) {
 				const colorValue = params[index + 2];
-				if (typeof colorValue === "number" && Number.isFinite(colorValue)) {
+				if (typeof colorValue === 'number' && Number.isFinite(colorValue)) {
 					sanitized.push(param, colorMode, colorValue);
 					index += 2;
 					continue;
@@ -186,12 +222,12 @@ function stripBackgroundResetParams(params: number[]): number[] {
 				const green = params[index + 3];
 				const blue = params[index + 4];
 				if (
-					typeof red === "number"
-					&& typeof green === "number"
-					&& typeof blue === "number"
-					&& Number.isFinite(red)
-					&& Number.isFinite(green)
-					&& Number.isFinite(blue)
+					typeof red === 'number' &&
+					typeof green === 'number' &&
+					typeof blue === 'number' &&
+					Number.isFinite(red) &&
+					Number.isFinite(green) &&
+					Number.isFinite(blue)
 				) {
 					sanitized.push(param, colorMode, red, green, blue);
 					index += 4;
@@ -207,47 +243,49 @@ function stripBackgroundResetParams(params: number[]): number[] {
 }
 
 function stabilizeBackgroundResets(text: string): string {
-	if (!text || !text.includes("\x1b[")) {
+	if (!text || !text.includes('\x1b[')) {
 		return text;
 	}
 
 	return text.replace(ANSI_SGR_PATTERN, (_sequence, rawParams: string) => {
 		const parsed = toSgrParams(rawParams);
 		if (parsed.length === 0) {
-			return "";
+			return '';
 		}
 		const sanitized = stripBackgroundResetParams(parsed);
 		if (sanitized.length === 0) {
-			return "";
+			return '';
 		}
-		return `\x1b[${sanitized.join(";")}m`;
+		return `\x1b[${sanitized.join(';')}m`;
 	});
 }
 
 function fitToWidth(text: string, width: number): string {
-	const trimmed = truncateToWidth(text, width, "");
+	const trimmed = truncateToWidth(text, width, '');
 	const gap = Math.max(0, width - visibleWidth(trimmed));
-	return gap > 0 ? `${trimmed}${" ".repeat(gap)}` : trimmed;
+	return gap > 0 ? `${trimmed}${' '.repeat(gap)}` : trimmed;
 }
 
 function applyLineBackgroundToWidth(
 	text: string,
 	width: number,
 	rowBgAnsi: string,
-	restoreBgAnsi: string,
+	restoreBgAnsi: string
 ): string {
 	if (width <= 0) {
-		return "";
+		return '';
 	}
 
 	const fitted = fitToWidth(text, width);
 	const withStableBackground = keepBackgroundAcrossResets(fitted, rowBgAnsi);
-	return stabilizeBackgroundResets(`${rowBgAnsi}${withStableBackground}${restoreBgAnsi}`);
+	return stabilizeBackgroundResets(
+		`${rowBgAnsi}${withStableBackground}${restoreBgAnsi}`
+	);
 }
 
 function wrapToWidth(text: string, width: number, wordWrap: boolean): string[] {
 	if (width <= 0) {
-		return [""];
+		return [''];
 	}
 
 	if (!wordWrap) {
@@ -256,17 +294,19 @@ function wrapToWidth(text: string, width: number, wordWrap: boolean): string[] {
 
 	const wrapped = wrapTextWithAnsi(text, width);
 	if (wrapped.length === 0) {
-		return [fitToWidth("", width)];
+		return [fitToWidth('', width)];
 	}
 
 	return wrapped.map((line) => fitToWidth(line, width));
 }
 
-function resolveLanguageFromPath(rawPath: string | undefined): string | undefined {
+function resolveLanguageFromPath(
+	rawPath: string | undefined
+): string | undefined {
 	if (!rawPath || !rawPath.trim()) {
 		return undefined;
 	}
-	const normalizedPath = rawPath.replace(/^@/, "").trim();
+	const normalizedPath = rawPath.replace(/^@/, '').trim();
 	if (!normalizedPath) {
 		return undefined;
 	}
@@ -277,7 +317,9 @@ function resolveLanguageFromPath(rawPath: string | undefined): string | undefine
 	}
 }
 
-function createCodeLineHighlighter(language: string | undefined): CodeLineHighlighter {
+function createCodeLineHighlighter(
+	language: string | undefined
+): CodeLineHighlighter {
 	if (!language) {
 		return (line) => sanitizeAnsiForThemedOutput(line);
 	}
@@ -316,16 +358,16 @@ function parseCanonicalDiffLine(line: string): {
 		return null;
 	}
 
-	const prefix = matched[1] ?? " ";
-	const lineNumber = (matched[2] ?? "").trim();
-	const content = matched[3] ?? "";
-	if (prefix === "+") {
-		return { lineKind: "add", lineNumber, content };
+	const prefix = matched[1] ?? ' ';
+	const lineNumber = (matched[2] ?? '').trim();
+	const content = matched[3] ?? '';
+	if (prefix === '+') {
+		return { lineKind: 'add', lineNumber, content };
 	}
-	if (prefix === "-") {
-		return { lineKind: "remove", lineNumber, content };
+	if (prefix === '-') {
+		return { lineKind: 'remove', lineNumber, content };
 	}
-	return { lineKind: "context", lineNumber, content };
+	return { lineKind: 'context', lineNumber, content };
 }
 
 function toNumber(value: string | undefined): number | null {
@@ -341,49 +383,49 @@ function anchorCanonicalLineCursors(
 	parsedNumber: number | null,
 	oldLineCursor: number | null,
 	newLineCursor: number | null,
-	lineNumberDelta: number,
+	lineNumberDelta: number
 ): { oldLineCursor: number | null; newLineCursor: number | null } {
 	if (parsedNumber === null) {
 		return { oldLineCursor, newLineCursor };
 	}
 
-	if (kind === "add") {
+	if (kind === 'add') {
 		return {
 			oldLineCursor,
-			newLineCursor: newLineCursor ?? parsedNumber,
+			newLineCursor: newLineCursor ?? parsedNumber
 		};
 	}
 
 	return {
 		oldLineCursor: parsedNumber,
-		newLineCursor: parsedNumber + lineNumberDelta,
+		newLineCursor: parsedNumber + lineNumberDelta
 	};
 }
 
-function classifyMetaLine(raw: string): DiffMetaEntry["kind"] {
-	if (raw.startsWith("@@")) {
-		return "hunk";
+function classifyMetaLine(raw: string): DiffMetaEntry['kind'] {
+	if (raw.startsWith('@@')) {
+		return 'hunk';
 	}
 	if (
-		raw.startsWith("diff --git")
-		|| raw.startsWith("index ")
-		|| raw.startsWith("--- ")
-		|| raw.startsWith("+++ ")
-		|| raw.startsWith("rename from ")
-		|| raw.startsWith("rename to ")
-		|| raw.startsWith("new file mode ")
-		|| raw.startsWith("deleted file mode ")
+		raw.startsWith('diff --git') ||
+		raw.startsWith('index ') ||
+		raw.startsWith('--- ') ||
+		raw.startsWith('+++ ') ||
+		raw.startsWith('rename from ') ||
+		raw.startsWith('rename to ') ||
+		raw.startsWith('new file mode ') ||
+		raw.startsWith('deleted file mode ')
 	) {
-		return "file";
+		return 'file';
 	}
-	return "meta";
+	return 'meta';
 }
 
 function createMetaEntry(raw: string, hunkIndex: number): DiffMetaEntry {
 	return {
 		kind: classifyMetaLine(raw),
 		raw,
-		hunkIndex,
+		hunkIndex
 	};
 }
 
@@ -398,7 +440,7 @@ function parseDiff(diffText: string): ParsedDiff {
 		context: 0,
 		hunks: 0,
 		files: 0,
-		lines: 0,
+		lines: 0
 	};
 	const entries: ParsedDiffEntry[] = [];
 
@@ -411,7 +453,7 @@ function parseDiff(diffText: string): ParsedDiff {
 	let newLineCursor: number | null = null;
 	let lineNumberDelta = 0;
 
-	for (const rawLine of diffText.replace(/\r/g, "").split("\n")) {
+	for (const rawLine of diffText.replace(/\r/g, '').split('\n')) {
 		stats.lines++;
 
 		const hunkMatch = rawLine.match(HUNK_HEADER_PATTERN);
@@ -421,20 +463,20 @@ function parseDiff(diffText: string): ParsedDiff {
 			oldLineCursor = toNumber(hunkMatch[1]);
 			newLineCursor = toNumber(hunkMatch[3]);
 			lineNumberDelta = (newLineCursor ?? 0) - (oldLineCursor ?? 0);
-			entries.push({ kind: "hunk", raw: rawLine, hunkIndex });
+			entries.push({ kind: 'hunk', raw: rawLine, hunkIndex });
 			continue;
 		}
 
-		if (rawLine.startsWith("diff --git ")) {
+		if (rawLine.startsWith('diff --git ')) {
 			stats.files++;
 			oldLineCursor = null;
 			newLineCursor = null;
 			lineNumberDelta = 0;
-			entries.push({ kind: "file", raw: rawLine, hunkIndex });
+			entries.push({ kind: 'file', raw: rawLine, hunkIndex });
 			continue;
 		}
 
-		if (rawLine.startsWith("--- ") || rawLine.startsWith("+++ ")) {
+		if (rawLine.startsWith('--- ') || rawLine.startsWith('+++ ')) {
 			oldLineCursor = null;
 			newLineCursor = null;
 			lineNumberDelta = 0;
@@ -451,21 +493,22 @@ function parseDiff(diffText: string): ParsedDiff {
 				parsedNumber,
 				oldLineCursor,
 				newLineCursor,
-				lineNumberDelta,
+				lineNumberDelta
 			);
 			oldLineCursor = anchoredCursors.oldLineCursor;
 			newLineCursor = anchoredCursors.newLineCursor;
 
-			const oldLineNumber = canonical.lineKind === "add" ? null : oldLineCursor;
-			const newLineNumber = canonical.lineKind === "remove" ? null : newLineCursor;
+			const oldLineNumber = canonical.lineKind === 'add' ? null : oldLineCursor;
+			const newLineNumber =
+				canonical.lineKind === 'remove' ? null : newLineCursor;
 
-			if (canonical.lineKind === "add") {
+			if (canonical.lineKind === 'add') {
 				stats.added++;
 				if (newLineCursor !== null) {
 					newLineCursor++;
 				}
 				lineNumberDelta++;
-			} else if (canonical.lineKind === "remove") {
+			} else if (canonical.lineKind === 'remove') {
 				stats.removed++;
 				if (oldLineCursor !== null) {
 					oldLineCursor++;
@@ -482,19 +525,19 @@ function parseDiff(diffText: string): ParsedDiff {
 			}
 
 			entries.push({
-				kind: "line",
+				kind: 'line',
 				lineKind: canonical.lineKind,
 				oldLineNumber,
 				newLineNumber,
 				fallbackLineNumber: canonical.lineNumber,
 				content: canonical.content,
 				raw: rawLine,
-				hunkIndex,
+				hunkIndex
 			});
 			continue;
 		}
 
-		if (rawLine.startsWith("-") && !rawLine.startsWith("---")) {
+		if (rawLine.startsWith('-') && !rawLine.startsWith('---')) {
 			hunkIndex = ensureImplicitHunk(hunkIndex);
 			stats.hunks = Math.max(stats.hunks, hunkIndex);
 			stats.removed++;
@@ -504,19 +547,19 @@ function parseDiff(diffText: string): ParsedDiff {
 			}
 			lineNumberDelta--;
 			entries.push({
-				kind: "line",
-				lineKind: "remove",
+				kind: 'line',
+				lineKind: 'remove',
 				oldLineNumber,
 				newLineNumber: null,
-				fallbackLineNumber: oldLineNumber !== null ? `${oldLineNumber}` : "",
+				fallbackLineNumber: oldLineNumber !== null ? `${oldLineNumber}` : '',
 				content: rawLine.slice(1),
 				raw: rawLine,
-				hunkIndex,
+				hunkIndex
 			});
 			continue;
 		}
 
-		if (rawLine.startsWith("+") && !rawLine.startsWith("+++")) {
+		if (rawLine.startsWith('+') && !rawLine.startsWith('+++')) {
 			hunkIndex = ensureImplicitHunk(hunkIndex);
 			stats.hunks = Math.max(stats.hunks, hunkIndex);
 			stats.added++;
@@ -526,19 +569,19 @@ function parseDiff(diffText: string): ParsedDiff {
 			}
 			lineNumberDelta++;
 			entries.push({
-				kind: "line",
-				lineKind: "add",
+				kind: 'line',
+				lineKind: 'add',
 				oldLineNumber: null,
 				newLineNumber,
-				fallbackLineNumber: newLineNumber !== null ? `${newLineNumber}` : "",
+				fallbackLineNumber: newLineNumber !== null ? `${newLineNumber}` : '',
 				content: rawLine.slice(1),
 				raw: rawLine,
-				hunkIndex,
+				hunkIndex
 			});
 			continue;
 		}
 
-		if (rawLine.startsWith(" ")) {
+		if (rawLine.startsWith(' ')) {
 			hunkIndex = ensureImplicitHunk(hunkIndex);
 			stats.hunks = Math.max(stats.hunks, hunkIndex);
 			stats.context++;
@@ -551,14 +594,19 @@ function parseDiff(diffText: string): ParsedDiff {
 				newLineCursor++;
 			}
 			entries.push({
-				kind: "line",
-				lineKind: "context",
+				kind: 'line',
+				lineKind: 'context',
 				oldLineNumber,
 				newLineNumber,
-				fallbackLineNumber: oldLineNumber !== null ? `${oldLineNumber}` : newLineNumber !== null ? `${newLineNumber}` : "",
+				fallbackLineNumber:
+					oldLineNumber !== null
+						? `${oldLineNumber}`
+						: newLineNumber !== null
+							? `${newLineNumber}`
+							: '',
 				content: rawLine.slice(1),
 				raw: rawLine,
-				hunkIndex,
+				hunkIndex
 			});
 			continue;
 		}
@@ -566,12 +614,15 @@ function parseDiff(diffText: string): ParsedDiff {
 		entries.push(createMetaEntry(rawLine, hunkIndex));
 	}
 
-	if (stats.hunks === 0 && (stats.added > 0 || stats.removed > 0 || stats.context > 0)) {
+	if (
+		stats.hunks === 0 &&
+		(stats.added > 0 || stats.removed > 0 || stats.context > 0)
+	) {
 		stats.hunks = 1;
 	}
 	if (stats.files === 0) {
 		const patchStyleFileHeaders = entries.filter(
-			(entry) => entry.kind === "file" && entry.raw.startsWith("+++ "),
+			(entry) => entry.kind === 'file' && entry.raw.startsWith('+++ ')
 		).length;
 		if (patchStyleFileHeaders > 0) {
 			stats.files = patchStyleFileHeaders;
@@ -587,14 +638,14 @@ function getLineNumberWidth(entries: ParsedDiffEntry[]): number {
 	let maxWidth = MIN_LINE_NUMBER_WIDTH;
 
 	for (const entry of entries) {
-		if (entry.kind !== "line") {
+		if (entry.kind !== 'line') {
 			continue;
 		}
 
 		const candidates = [
 			entry.oldLineNumber,
 			entry.newLineNumber,
-			toNumber(entry.fallbackLineNumber),
+			toNumber(entry.fallbackLineNumber)
 		].filter((value): value is number => value !== null);
 
 		for (const candidate of candidates) {
@@ -608,35 +659,46 @@ function getLineNumberWidth(entries: ParsedDiffEntry[]): number {
 	return maxWidth;
 }
 
-function formatLineNumber(value: number | null, fallback: string, width: number): string {
+function formatLineNumber(
+	value: number | null,
+	fallback: string,
+	width: number
+): string {
 	if (value !== null) {
-		return `${value}`.padStart(width, " ");
+		return `${value}`.padStart(width, ' ');
 	}
 	if (fallback.trim()) {
-		return fallback.trim().slice(-width).padStart(width, " ");
+		return fallback.trim().slice(-width).padStart(width, ' ');
 	}
-	return " ".repeat(width);
+	return ' '.repeat(width);
 }
 
-function formatMetaEntryRows(entry: DiffMetaEntry, width: number, theme: DiffTheme, wordWrap: boolean): RenderedRow[] {
-	const normalized = sanitizeAnsiForThemedOutput(normalizeCodeWhitespace(entry.raw));
+function formatMetaEntryRows(
+	entry: DiffMetaEntry,
+	width: number,
+	theme: DiffTheme,
+	wordWrap: boolean
+): RenderedRow[] {
+	const normalized = sanitizeAnsiForThemedOutput(
+		normalizeCodeWhitespace(entry.raw)
+	);
 	const lines = wordWrap
 		? wrapToWidth(normalized, width, true)
 		: [truncateToWidth(normalized, width)];
 
 	const mapColor = (line: string): string => {
-		if (entry.kind === "hunk") {
-			return stabilizeBackgroundResets(theme.fg("accent", line));
+		if (entry.kind === 'hunk') {
+			return stabilizeBackgroundResets(theme.fg('accent', line));
 		}
-		if (entry.kind === "file") {
-			return stabilizeBackgroundResets(theme.fg("muted", line));
+		if (entry.kind === 'file') {
+			return stabilizeBackgroundResets(theme.fg('muted', line));
 		}
-		return stabilizeBackgroundResets(theme.fg("toolDiffContext", line));
+		return stabilizeBackgroundResets(theme.fg('toolDiffContext', line));
 	};
 
 	return lines.map((line) => ({
 		text: mapColor(line),
-		hunkIndex: entry.kind === "file" ? null : entry.hunkIndex || null,
+		hunkIndex: entry.kind === 'file' ? null : entry.hunkIndex || null
 	}));
 }
 
@@ -650,17 +712,21 @@ function buildSplitRows(entries: ParsedDiffEntry[]): SplitDiffRow[] {
 			break;
 		}
 
-		if (entry.kind !== "line") {
+		if (entry.kind !== 'line') {
 			rows.push({ meta: entry, hunkIndex: entry.hunkIndex || null });
 			index++;
 			continue;
 		}
 
-		if (entry.lineKind === "remove") {
+		if (entry.lineKind === 'remove') {
 			const removed: DiffLineEntry[] = [];
 			while (index < entries.length) {
 				const candidate = entries[index];
-				if (!candidate || candidate.kind !== "line" || candidate.lineKind !== "remove") {
+				if (
+					!candidate ||
+					candidate.kind !== 'line' ||
+					candidate.lineKind !== 'remove'
+				) {
 					break;
 				}
 				removed.push(candidate);
@@ -670,7 +736,11 @@ function buildSplitRows(entries: ParsedDiffEntry[]): SplitDiffRow[] {
 			const added: DiffLineEntry[] = [];
 			while (index < entries.length) {
 				const candidate = entries[index];
-				if (!candidate || candidate.kind !== "line" || candidate.lineKind !== "add") {
+				if (
+					!candidate ||
+					candidate.kind !== 'line' ||
+					candidate.lineKind !== 'add'
+				) {
 					break;
 				}
 				added.push(candidate);
@@ -684,33 +754,48 @@ function buildSplitRows(entries: ParsedDiffEntry[]): SplitDiffRow[] {
 				rows.push({
 					left,
 					right,
-					hunkIndex: left?.hunkIndex ?? right?.hunkIndex ?? null,
+					hunkIndex: left?.hunkIndex ?? right?.hunkIndex ?? null
 				});
 			}
 			continue;
 		}
 
-		if (entry.lineKind === "add") {
+		if (entry.lineKind === 'add') {
 			rows.push({ right: entry, hunkIndex: entry.hunkIndex || null });
 			index++;
 			continue;
 		}
 
-		rows.push({ left: entry, right: entry, hunkIndex: entry.hunkIndex || null });
+		rows.push({
+			left: entry,
+			right: entry,
+			hunkIndex: entry.hunkIndex || null
+		});
 		index++;
 	}
 
 	return rows;
 }
 
-function getCellLineNumber(line: DiffLineEntry, side: "left" | "right"): number | null {
-	if (side === "left") {
-		return line.oldLineNumber ?? (line.lineKind === "context" ? line.newLineNumber : null);
+function getCellLineNumber(
+	line: DiffLineEntry,
+	side: 'left' | 'right'
+): number | null {
+	if (side === 'left') {
+		return (
+			line.oldLineNumber ??
+			(line.lineKind === 'context' ? line.newLineNumber : null)
+		);
 	}
-	return line.newLineNumber ?? (line.lineKind === "context" ? line.oldLineNumber : null);
+	return (
+		line.newLineNumber ??
+		(line.lineKind === 'context' ? line.oldLineNumber : null)
+	);
 }
 
-function tokenizeInlineDiff(input: string): Array<{ value: string; start: number; end: number }> {
+function tokenizeInlineDiff(
+	input: string
+): Array<{ value: string; start: number; end: number }> {
 	if (!input) {
 		return [];
 	}
@@ -720,14 +805,14 @@ function tokenizeInlineDiff(input: string): Array<{ value: string; start: number
 	let match: RegExpExecArray | null;
 
 	while ((match = pattern.exec(input)) !== null) {
-		const value = match[0] ?? "";
+		const value = match[0] ?? '';
 		if (!value) {
 			continue;
 		}
 		tokens.push({
 			value,
 			start: match.index,
-			end: match.index + value.length,
+			end: match.index + value.length
 		});
 	}
 
@@ -767,7 +852,7 @@ function mergeSpans(spans: DiffSpan[]): DiffSpan[] {
 function tokensToDiffSpans(
 	text: string,
 	tokens: Array<{ value: string; start: number; end: number }>,
-	changedIndexes: Set<number>,
+	changedIndexes: Set<number>
 ): DiffSpan[] {
 	if (tokens.length === 0 || changedIndexes.size === 0) {
 		return [];
@@ -809,10 +894,10 @@ function tokensToDiffSpans(
 		let spanStart = span.start;
 		let spanEnd = span.end;
 
-		while (spanStart < spanEnd && /\s/.test(text[spanStart] ?? "")) {
+		while (spanStart < spanEnd && /\s/.test(text[spanStart] ?? '')) {
 			spanStart++;
 		}
-		while (spanEnd > spanStart && /\s/.test(text[spanEnd - 1] ?? "")) {
+		while (spanEnd > spanStart && /\s/.test(text[spanEnd - 1] ?? '')) {
 			spanEnd--;
 		}
 		if (spanEnd > spanStart) {
@@ -823,11 +908,17 @@ function tokensToDiffSpans(
 	return mergeSpans(trimmed);
 }
 
-function computeInlineDiffSpans(leftLine: string, rightLine: string): { left: DiffSpan[]; right: DiffSpan[] } {
+function computeInlineDiffSpans(
+	leftLine: string,
+	rightLine: string
+): { left: DiffSpan[]; right: DiffSpan[] } {
 	if (leftLine === rightLine) {
 		return { left: [], right: [] };
 	}
-	if (leftLine.length > MAX_INLINE_DIFF_LINE_LENGTH || rightLine.length > MAX_INLINE_DIFF_LINE_LENGTH) {
+	if (
+		leftLine.length > MAX_INLINE_DIFF_LINE_LENGTH ||
+		rightLine.length > MAX_INLINE_DIFF_LINE_LENGTH
+	) {
 		return { left: [], right: [] };
 	}
 
@@ -838,19 +929,24 @@ function computeInlineDiffSpans(leftLine: string, rightLine: string): { left: Di
 
 	if (leftCount === 0 || rightCount === 0) {
 		return {
-			left: leftLine.trim().length > 0 ? [{ start: 0, end: leftLine.length }] : [],
-			right: rightLine.trim().length > 0 ? [{ start: 0, end: rightLine.length }] : [],
+			left:
+				leftLine.trim().length > 0 ? [{ start: 0, end: leftLine.length }] : [],
+			right:
+				rightLine.trim().length > 0 ? [{ start: 0, end: rightLine.length }] : []
 		};
 	}
 
-	const table: number[][] = Array.from({ length: leftCount + 1 }, () => Array<number>(rightCount + 1).fill(0));
+	const table: number[][] = Array.from({ length: leftCount + 1 }, () =>
+		Array<number>(rightCount + 1).fill(0)
+	);
 
 	for (let leftIndex = 1; leftIndex <= leftCount; leftIndex++) {
 		const leftToken = leftTokens[leftIndex - 1];
 		for (let rightIndex = 1; rightIndex <= rightCount; rightIndex++) {
 			const rightToken = rightTokens[rightIndex - 1];
 			if (leftToken?.value === rightToken?.value) {
-				table[leftIndex][rightIndex] = (table[leftIndex - 1]?.[rightIndex - 1] ?? 0) + 1;
+				table[leftIndex][rightIndex] =
+					(table[leftIndex - 1]?.[rightIndex - 1] ?? 0) + 1;
 			} else {
 				const top = table[leftIndex - 1]?.[rightIndex] ?? 0;
 				const side = table[leftIndex]?.[rightIndex - 1] ?? 0;
@@ -895,18 +991,20 @@ function computeInlineDiffSpans(leftLine: string, rightLine: string): { left: Di
 
 	return {
 		left: tokensToDiffSpans(leftLine, leftTokens, changedLeft),
-		right: tokensToDiffSpans(rightLine, rightTokens, changedRight),
+		right: tokensToDiffSpans(rightLine, rightTokens, changedRight)
 	};
 }
 
-function buildInlineHighlightMap(rows: SplitDiffRow[]): WeakMap<DiffLineEntry, DiffSpan[]> {
+function buildInlineHighlightMap(
+	rows: SplitDiffRow[]
+): WeakMap<DiffLineEntry, DiffSpan[]> {
 	const highlights = new WeakMap<DiffLineEntry, DiffSpan[]>();
 
 	for (const row of rows) {
 		if (!row.left || !row.right) {
 			continue;
 		}
-		if (row.left.lineKind !== "remove" || row.right.lineKind !== "add") {
+		if (row.left.lineKind !== 'remove' || row.right.lineKind !== 'add') {
 			continue;
 		}
 
@@ -945,7 +1043,7 @@ function ansi256ToRgb(code: number): RgbColor {
 			{ r: 0, g: 0, b: 255 },
 			{ r: 255, g: 0, b: 255 },
 			{ r: 0, g: 255, b: 255 },
-			{ r: 255, g: 255, b: 255 },
+			{ r: 255, g: 255, b: 255 }
 		];
 		return base16[code] ?? { r: 255, g: 255, b: 255 };
 	}
@@ -962,7 +1060,7 @@ function ansi256ToRgb(code: number): RgbColor {
 	return {
 		r: levels[red] ?? 0,
 		g: levels[green] ?? 0,
-		b: levels[blue] ?? 0,
+		b: levels[blue] ?? 0
 	};
 }
 
@@ -972,21 +1070,21 @@ function parseAnsiColorCode(ansi: string | undefined): RgbColor | null {
 	}
 	const rgbMatch = /\x1b\[(?:3|4)8;2;(\d{1,3});(\d{1,3});(\d{1,3})m/.exec(ansi);
 	if (rgbMatch) {
-		const r = Number.parseInt(rgbMatch[1] ?? "0", 10);
-		const g = Number.parseInt(rgbMatch[2] ?? "0", 10);
-		const b = Number.parseInt(rgbMatch[3] ?? "0", 10);
+		const r = Number.parseInt(rgbMatch[1] ?? '0', 10);
+		const g = Number.parseInt(rgbMatch[2] ?? '0', 10);
+		const b = Number.parseInt(rgbMatch[3] ?? '0', 10);
 		if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
 			return {
 				r: Math.max(0, Math.min(255, r)),
 				g: Math.max(0, Math.min(255, g)),
-				b: Math.max(0, Math.min(255, b)),
+				b: Math.max(0, Math.min(255, b))
 			};
 		}
 	}
 
 	const bitMatch = /\x1b\[(?:3|4)8;5;(\d{1,3})m/.exec(ansi);
 	if (bitMatch) {
-		const code = Number.parseInt(bitMatch[1] ?? "0", 10);
+		const code = Number.parseInt(bitMatch[1] ?? '0', 10);
 		if (Number.isFinite(code)) {
 			return ansi256ToRgb(code);
 		}
@@ -1007,16 +1105,20 @@ function mixRgb(base: RgbColor, tint: RgbColor, ratio: number): RgbColor {
 	return {
 		r: base.r * (1 - clamped) + tint.r * clamped,
 		g: base.g * (1 - clamped) + tint.g * clamped,
-		b: base.b * (1 - clamped) + tint.b * clamped,
+		b: base.b * (1 - clamped) + tint.b * clamped
 	};
 }
 
-function readThemeAnsi(theme: DiffTheme, kind: "fg" | "bg", slot: string): string | undefined {
+function readThemeAnsi(
+	theme: DiffTheme,
+	kind: 'fg' | 'bg',
+	slot: string
+): string | undefined {
 	try {
-		if (kind === "fg" && typeof theme.getFgAnsi === "function") {
+		if (kind === 'fg' && typeof theme.getFgAnsi === 'function') {
 			return theme.getFgAnsi(slot);
 		}
-		if (kind === "bg" && typeof theme.getBgAnsi === "function") {
+		if (kind === 'bg' && typeof theme.getBgAnsi === 'function') {
 			return theme.getBgAnsi(slot);
 		}
 	} catch {
@@ -1026,50 +1128,75 @@ function readThemeAnsi(theme: DiffTheme, kind: "fg" | "bg", slot: string): strin
 }
 
 function resolveContainerBackgroundAnsi(theme: DiffTheme): string | undefined {
-	return readThemeAnsi(theme, "bg", "toolSuccessBg")
-		?? readThemeAnsi(theme, "bg", "toolPendingBg")
-		?? readThemeAnsi(theme, "bg", "toolErrorBg")
-		?? readThemeAnsi(theme, "bg", "userMessageBg");
+	return (
+		readThemeAnsi(theme, 'bg', 'toolSuccessBg') ??
+		readThemeAnsi(theme, 'bg', 'toolPendingBg') ??
+		readThemeAnsi(theme, 'bg', 'toolErrorBg') ??
+		readThemeAnsi(theme, 'bg', 'userMessageBg')
+	);
 }
 
 function resolveDiffPalette(theme: DiffTheme): DiffPalette {
-	const baseBg = parseAnsiColorCode(readThemeAnsi(theme, "bg", "toolSuccessBg"))
-		?? parseAnsiColorCode(readThemeAnsi(theme, "bg", "toolPendingBg"))
-		?? parseAnsiColorCode(readThemeAnsi(theme, "bg", "userMessageBg"))
-		?? { r: 32, g: 35, b: 42 };
-	const addFg = parseAnsiColorCode(readThemeAnsi(theme, "fg", "toolDiffAdded")) ?? { r: 88, g: 173, b: 88 };
-	const removeFg = parseAnsiColorCode(readThemeAnsi(theme, "fg", "toolDiffRemoved")) ?? { r: 196, g: 98, b: 98 };
+	const baseBg = parseAnsiColorCode(
+		readThemeAnsi(theme, 'bg', 'toolSuccessBg')
+	) ??
+		parseAnsiColorCode(readThemeAnsi(theme, 'bg', 'toolPendingBg')) ??
+		parseAnsiColorCode(readThemeAnsi(theme, 'bg', 'userMessageBg')) ?? {
+			r: 32,
+			g: 35,
+			b: 42
+		};
+	const addFg = parseAnsiColorCode(
+		readThemeAnsi(theme, 'fg', 'toolDiffAdded')
+	) ?? { r: 88, g: 173, b: 88 };
+	const removeFg = parseAnsiColorCode(
+		readThemeAnsi(theme, 'fg', 'toolDiffRemoved')
+	) ?? { r: 196, g: 98, b: 98 };
 	const addTint = mixRgb(addFg, ADDITION_TINT_TARGET, 0.35);
 	const removeTint = mixRgb(removeFg, DELETION_TINT_TARGET, 0.65);
 
 	const addRowBg = mixRgb(baseBg, addTint, ADD_ROW_BACKGROUND_MIX_RATIO);
-	const removeRowBg = mixRgb(baseBg, removeTint, REMOVE_ROW_BACKGROUND_MIX_RATIO);
+	const removeRowBg = mixRgb(
+		baseBg,
+		removeTint,
+		REMOVE_ROW_BACKGROUND_MIX_RATIO
+	);
 	const addEmphasisBg = mixRgb(baseBg, addTint, ADD_INLINE_EMPHASIS_MIX_RATIO);
-	const removeEmphasisBg = mixRgb(baseBg, removeTint, REMOVE_INLINE_EMPHASIS_MIX_RATIO);
+	const removeEmphasisBg = mixRgb(
+		baseBg,
+		removeTint,
+		REMOVE_INLINE_EMPHASIS_MIX_RATIO
+	);
 
 	return {
 		addRowBgAnsi: rgbToBgAnsi(addRowBg),
 		removeRowBgAnsi: rgbToBgAnsi(removeRowBg),
 		addEmphasisBgAnsi: rgbToBgAnsi(addEmphasisBg),
-		removeEmphasisBgAnsi: rgbToBgAnsi(removeEmphasisBg),
+		removeEmphasisBgAnsi: rgbToBgAnsi(removeEmphasisBg)
 	};
 }
 
-function getLineRowBackground(kind: DiffLineKind, palette: DiffPalette): string | undefined {
-	if (kind === "add") {
+function getLineRowBackground(
+	kind: DiffLineKind,
+	palette: DiffPalette
+): string | undefined {
+	if (kind === 'add') {
 		return palette.addRowBgAnsi;
 	}
-	if (kind === "remove") {
+	if (kind === 'remove') {
 		return palette.removeRowBgAnsi;
 	}
 	return undefined;
 }
 
-function getLineEmphasisBackground(kind: DiffLineKind, palette: DiffPalette): string | undefined {
-	if (kind === "add") {
+function getLineEmphasisBackground(
+	kind: DiffLineKind,
+	palette: DiffPalette
+): string | undefined {
+	if (kind === 'add') {
 		return palette.addEmphasisBgAnsi;
 	}
-	if (kind === "remove") {
+	if (kind === 'remove') {
 		return palette.removeEmphasisBgAnsi;
 	}
 	return undefined;
@@ -1080,7 +1207,7 @@ function applyBackgroundToVisibleRange(
 	start: number,
 	end: number,
 	backgroundAnsi: string,
-	restoreBackgroundAnsi: string,
+	restoreBackgroundAnsi: string
 ): string {
 	if (!ansiText || start >= end || end <= 0) {
 		return ansiText;
@@ -1088,14 +1215,14 @@ function applyBackgroundToVisibleRange(
 
 	const rangeStart = Math.max(0, start);
 	const rangeEnd = Math.max(rangeStart, end);
-	let output = "";
+	let output = '';
 	let visibleIndex = 0;
 	let index = 0;
 	let inRange = false;
 
 	while (index < ansiText.length) {
-		if (ansiText[index] === "\x1b") {
-			const sequenceEnd = ansiText.indexOf("m", index);
+		if (ansiText[index] === '\x1b') {
+			const sequenceEnd = ansiText.indexOf('m', index);
 			if (sequenceEnd !== -1) {
 				output += ansiText.slice(index, sequenceEnd + 1);
 				index = sequenceEnd + 1;
@@ -1112,7 +1239,7 @@ function applyBackgroundToVisibleRange(
 			inRange = false;
 		}
 
-		output += ansiText[index] ?? "";
+		output += ansiText[index] ?? '';
 		visibleIndex++;
 		index++;
 	}
@@ -1130,7 +1257,7 @@ function applyInlineSpanHighlight(
 	spans: DiffSpan[],
 	emphasisBgAnsi: string | undefined,
 	rowBgAnsi: string | undefined,
-	fallbackBgAnsi: string | undefined,
+	fallbackBgAnsi: string | undefined
 ): string {
 	if (!renderedText || !plainText || spans.length === 0 || !emphasisBgAnsi) {
 		return renderedText;
@@ -1140,9 +1267,9 @@ function applyInlineSpanHighlight(
 		spans
 			.map((span) => ({
 				start: Math.max(0, Math.min(plainText.length, span.start)),
-				end: Math.max(0, Math.min(plainText.length, span.end)),
+				end: Math.max(0, Math.min(plainText.length, span.end))
 			}))
-			.filter((span) => span.end > span.start),
+			.filter((span) => span.end > span.start)
 	);
 	if (sorted.length === 0) {
 		return renderedText;
@@ -1160,7 +1287,7 @@ function applyInlineSpanHighlight(
 			span.start,
 			span.end,
 			emphasisBgAnsi,
-			restoreBackgroundAnsi,
+			restoreBackgroundAnsi
 		);
 	}
 
@@ -1169,9 +1296,9 @@ function applyInlineSpanHighlight(
 
 function colorizeSegment(
 	theme: DiffTheme,
-	color: "dim" | "toolDiffAdded" | "toolDiffRemoved",
+	color: 'dim' | 'toolDiffAdded' | 'toolDiffRemoved',
 	text: string,
-	rowBg: string | undefined,
+	rowBg: string | undefined
 ): string {
 	let themedText: string;
 	try {
@@ -1202,66 +1329,87 @@ function keepBackgroundAcrossResets(text: string, rowBg: string): string {
 	});
 }
 
-function renderChangeMarker(kind: DiffLineKind, theme: DiffTheme, rowBg: string | undefined): string {
-	if (kind === "add") {
-		return colorizeSegment(theme, "toolDiffAdded", "▌", rowBg);
+function renderChangeMarker(
+	kind: DiffLineKind,
+	theme: DiffTheme,
+	rowBg: string | undefined
+): string {
+	if (kind === 'add') {
+		return colorizeSegment(theme, 'toolDiffAdded', '▌', rowBg);
 	}
-	if (kind === "remove") {
-		return colorizeSegment(theme, "toolDiffRemoved", "▌", rowBg);
+	if (kind === 'remove') {
+		return colorizeSegment(theme, 'toolDiffRemoved', '▌', rowBg);
 	}
-	return rowBg ? `${rowBg} ${rowBg}` : " ";
+	return rowBg ? `${rowBg} ${rowBg}` : ' ';
 }
 
-function renderCodeDivider(theme: DiffTheme, rowBg: string | undefined): string {
-	return colorizeSegment(theme, "dim", "│ ", rowBg);
+function renderCodeDivider(
+	theme: DiffTheme,
+	rowBg: string | undefined
+): string {
+	return colorizeSegment(theme, 'dim', '│ ', rowBg);
 }
 
-function getLineNumberColor(kind: DiffLineKind): "dim" | "toolDiffAdded" | "toolDiffRemoved" {
-	if (kind === "add") {
-		return "toolDiffAdded";
+function getLineNumberColor(
+	kind: DiffLineKind
+): 'dim' | 'toolDiffAdded' | 'toolDiffRemoved' {
+	if (kind === 'add') {
+		return 'toolDiffAdded';
 	}
-	if (kind === "remove") {
-		return "toolDiffRemoved";
+	if (kind === 'remove') {
+		return 'toolDiffRemoved';
 	}
-	return "dim";
+	return 'dim';
 }
 
 function renderLinePrefix(
 	kind: DiffLineKind,
 	lineNumber: string,
 	theme: DiffTheme,
-	rowBg: string | undefined,
+	rowBg: string | undefined
 ): string {
 	const marker = renderChangeMarker(kind, theme, rowBg);
 	const numberColor = getLineNumberColor(kind);
 	const number = colorizeSegment(theme, numberColor, lineNumber, rowBg);
-	const spacer = rowBg ? `${rowBg} ` : " ";
+	const spacer = rowBg ? `${rowBg} ` : ' ';
 	return `${marker}${spacer}${number}${spacer}`;
 }
 
-function renderLineContinuationPrefix(lineNumberWidth: number, rowBg: string | undefined, theme: DiffTheme): string {
-	const blankLineNumber = " ".repeat(lineNumberWidth);
-	return renderLinePrefix("context", blankLineNumber, theme, rowBg);
+function renderLineContinuationPrefix(
+	lineNumberWidth: number,
+	rowBg: string | undefined,
+	theme: DiffTheme
+): string {
+	const blankLineNumber = ' '.repeat(lineNumberWidth);
+	return renderLinePrefix('context', blankLineNumber, theme, rowBg);
 }
 
-function renderCompactMarker(kind: DiffLineKind, theme: DiffTheme, rowBg: string | undefined): string {
-	if (kind === "add") {
-		return colorizeSegment(theme, "toolDiffAdded", "+", rowBg);
+function renderCompactMarker(
+	kind: DiffLineKind,
+	theme: DiffTheme,
+	rowBg: string | undefined
+): string {
+	if (kind === 'add') {
+		return colorizeSegment(theme, 'toolDiffAdded', '+', rowBg);
 	}
-	if (kind === "remove") {
-		return colorizeSegment(theme, "toolDiffRemoved", "-", rowBg);
+	if (kind === 'remove') {
+		return colorizeSegment(theme, 'toolDiffRemoved', '-', rowBg);
 	}
-	return colorizeSegment(theme, "dim", "·", rowBg);
+	return colorizeSegment(theme, 'dim', '·', rowBg);
 }
 
-function renderCompactLinePrefix(kind: DiffLineKind, theme: DiffTheme, rowBg: string | undefined): string {
+function renderCompactLinePrefix(
+	kind: DiffLineKind,
+	theme: DiffTheme,
+	rowBg: string | undefined
+): string {
 	const marker = renderCompactMarker(kind, theme, rowBg);
-	const spacer = rowBg ? `${rowBg} ` : " ";
+	const spacer = rowBg ? `${rowBg} ` : ' ';
 	return `${marker}${spacer}`;
 }
 
 function renderCompactContinuationPrefix(rowBg: string | undefined): string {
-	return rowBg ? `${rowBg}  ` : "  ";
+	return rowBg ? `${rowBg}  ` : '  ';
 }
 
 function renderCompactLineCell(
@@ -1271,10 +1419,10 @@ function renderCompactLineCell(
 	rowBg: string | undefined,
 	restoreBgAnsi: string | undefined,
 	theme: DiffTheme,
-	wordWrap: boolean,
+	wordWrap: boolean
 ): string[] {
 	if (width <= 0) {
-		return [""];
+		return [''];
 	}
 
 	const prefix = renderCompactLinePrefix(kind, theme, undefined);
@@ -1285,14 +1433,21 @@ function renderCompactLineCell(
 
 	if (!rowBg) {
 		return wrappedCodeLines.map((wrappedCodeLine, index) =>
-			stabilizeBackgroundResets(`${index === 0 ? prefix : continuationPrefix}${wrappedCodeLine}`)
+			stabilizeBackgroundResets(
+				`${index === 0 ? prefix : continuationPrefix}${wrappedCodeLine}`
+			)
 		);
 	}
 
 	const safeRestoreBgAnsi = restoreBgAnsi ?? rowBg ?? ANSI_BG_RESET;
 	return wrappedCodeLines.map((wrappedCodeLine, index) => {
 		const linePrefix = index === 0 ? prefix : continuationPrefix;
-		return applyLineBackgroundToWidth(`${linePrefix}${wrappedCodeLine}`, width, rowBg, safeRestoreBgAnsi);
+		return applyLineBackgroundToWidth(
+			`${linePrefix}${wrappedCodeLine}`,
+			width,
+			rowBg,
+			safeRestoreBgAnsi
+		);
 	});
 }
 
@@ -1304,23 +1459,29 @@ function renderLineCell(
 	rowBg: string | undefined,
 	restoreBgAnsi: string | undefined,
 	theme: DiffTheme,
-	wordWrap: boolean,
+	wordWrap: boolean
 ): string[] {
 	if (width <= 0) {
-		return [""];
+		return [''];
 	}
 
 	const prefixPlainWidth = visibleWidth(`▌ ${lineNumber} `);
 	const dividerPlainWidth = 2;
 	const codeWidth = Math.max(0, width - prefixPlainWidth - dividerPlainWidth);
 	const prefix = renderLinePrefix(kind, lineNumber, theme, undefined);
-	const continuationPrefix = renderLineContinuationPrefix(lineNumber.length, undefined, theme);
+	const continuationPrefix = renderLineContinuationPrefix(
+		lineNumber.length,
+		undefined,
+		theme
+	);
 	const divider = renderCodeDivider(theme, undefined);
 	const wrappedCodeLines = wrapToWidth(code, codeWidth, wordWrap);
 
 	if (!rowBg) {
 		return wrappedCodeLines.map((wrappedCodeLine, index) =>
-			stabilizeBackgroundResets(`${index === 0 ? prefix : continuationPrefix}${divider}${wrappedCodeLine}`)
+			stabilizeBackgroundResets(
+				`${index === 0 ? prefix : continuationPrefix}${divider}${wrappedCodeLine}`
+			)
 		);
 	}
 
@@ -1331,7 +1492,7 @@ function renderLineCell(
 			`${linePrefix}${divider}${wrappedCodeLine}`,
 			width,
 			rowBg,
-			safeRestoreBgAnsi,
+			safeRestoreBgAnsi
 		);
 	});
 }
@@ -1345,32 +1506,57 @@ function renderUnified(
 	palette: DiffPalette,
 	highlightLine: CodeLineHighlighter,
 	containerBgAnsi: string | undefined,
-	wordWrap: boolean,
+	wordWrap: boolean
 ): RenderedRow[] {
 	const rows: RenderedRow[] = [];
 
 	for (const entry of entries) {
-		if (entry.kind !== "line") {
+		if (entry.kind !== 'line') {
 			rows.push(...formatMetaEntryRows(entry, width, theme, wordWrap));
 			continue;
 		}
 
-		const lineNumber = entry.lineKind === "add"
-			? formatLineNumber(entry.newLineNumber, entry.fallbackLineNumber, lineNumberWidth)
-			: formatLineNumber(entry.oldLineNumber, entry.fallbackLineNumber, lineNumberWidth);
+		const lineNumber =
+			entry.lineKind === 'add'
+				? formatLineNumber(
+						entry.newLineNumber,
+						entry.fallbackLineNumber,
+						lineNumberWidth
+					)
+				: formatLineNumber(
+						entry.oldLineNumber,
+						entry.fallbackLineNumber,
+						lineNumberWidth
+					);
 		const codeText = normalizeCodeWhitespace(entry.content);
 		const syntaxHighlighted = highlightLine(codeText);
 		const rowBg = getLineRowBackground(entry.lineKind, palette);
 		const emphasisBg = getLineEmphasisBackground(entry.lineKind, palette);
 		const inlineSpans = inlineHighlights.get(entry) ?? [];
-		const highlighted = applyInlineSpanHighlight(codeText, syntaxHighlighted, inlineSpans, emphasisBg, rowBg, containerBgAnsi);
-		const lines = renderLineCell(entry.lineKind, lineNumber, highlighted, width, rowBg, containerBgAnsi, theme, wordWrap);
+		const highlighted = applyInlineSpanHighlight(
+			codeText,
+			syntaxHighlighted,
+			inlineSpans,
+			emphasisBg,
+			rowBg,
+			containerBgAnsi
+		);
+		const lines = renderLineCell(
+			entry.lineKind,
+			lineNumber,
+			highlighted,
+			width,
+			rowBg,
+			containerBgAnsi,
+			theme,
+			wordWrap
+		);
 
 		rows.push(
 			...lines.map((text) => ({
 				text,
-				hunkIndex: entry.hunkIndex || null,
-			})),
+				hunkIndex: entry.hunkIndex || null
+			}))
 		);
 	}
 
@@ -1386,7 +1572,7 @@ function toUnifiedFallbackRows(
 	palette: DiffPalette,
 	highlightLine: CodeLineHighlighter,
 	containerBgAnsi: string | undefined,
-	wordWrap: boolean,
+	wordWrap: boolean
 ): RenderedRow[] {
 	const flattened: ParsedDiffEntry[] = [];
 	for (const row of rows) {
@@ -1401,7 +1587,17 @@ function toUnifiedFallbackRows(
 			flattened.push(row.right);
 		}
 	}
-	return renderUnified(flattened, width, theme, lineNumberWidth, inlineHighlights, palette, highlightLine, containerBgAnsi, wordWrap);
+	return renderUnified(
+		flattened,
+		width,
+		theme,
+		lineNumberWidth,
+		inlineHighlights,
+		palette,
+		highlightLine,
+		containerBgAnsi,
+		wordWrap
+	);
 }
 
 function renderCompact(
@@ -1412,12 +1608,12 @@ function renderCompact(
 	palette: DiffPalette,
 	highlightLine: CodeLineHighlighter,
 	containerBgAnsi: string | undefined,
-	wordWrap: boolean,
+	wordWrap: boolean
 ): RenderedRow[] {
 	const rows: RenderedRow[] = [];
 
 	for (const entry of entries) {
-		if (entry.kind !== "line") {
+		if (entry.kind !== 'line') {
 			rows.push(...formatMetaEntryRows(entry, width, theme, wordWrap));
 			continue;
 		}
@@ -1427,32 +1623,56 @@ function renderCompact(
 		const rowBg = getLineRowBackground(entry.lineKind, palette);
 		const emphasisBg = getLineEmphasisBackground(entry.lineKind, palette);
 		const inlineSpans = inlineHighlights.get(entry) ?? [];
-		const highlighted = applyInlineSpanHighlight(codeText, syntaxHighlighted, inlineSpans, emphasisBg, rowBg, containerBgAnsi);
-		const lines = renderCompactLineCell(entry.lineKind, highlighted, width, rowBg, containerBgAnsi, theme, wordWrap);
+		const highlighted = applyInlineSpanHighlight(
+			codeText,
+			syntaxHighlighted,
+			inlineSpans,
+			emphasisBg,
+			rowBg,
+			containerBgAnsi
+		);
+		const lines = renderCompactLineCell(
+			entry.lineKind,
+			highlighted,
+			width,
+			rowBg,
+			containerBgAnsi,
+			theme,
+			wordWrap
+		);
 
 		rows.push(
 			...lines.map((text) => ({
 				text,
-				hunkIndex: entry.hunkIndex || null,
-			})),
+				hunkIndex: entry.hunkIndex || null
+			}))
 		);
 	}
 
 	return rows;
 }
 
-function renderSplitBlankCell(columnWidth: number, lineNumberWidth: number, theme: DiffTheme): string {
-	const prefixPlainWidth = visibleWidth(`▌ ${" ".repeat(lineNumberWidth)} `);
+function renderSplitBlankCell(
+	columnWidth: number,
+	lineNumberWidth: number,
+	theme: DiffTheme
+): string {
+	const prefixPlainWidth = visibleWidth(`▌ ${' '.repeat(lineNumberWidth)} `);
 	const dividerPlainWidth = 2;
-	const codeWidth = Math.max(0, columnWidth - prefixPlainWidth - dividerPlainWidth);
-	const number = theme.fg("dim", " ".repeat(lineNumberWidth));
-	const divider = theme.fg("dim", "│ ");
-	return stabilizeBackgroundResets(`  ${number} ${divider}${" ".repeat(codeWidth)}`);
+	const codeWidth = Math.max(
+		0,
+		columnWidth - prefixPlainWidth - dividerPlainWidth
+	);
+	const number = theme.fg('dim', ' '.repeat(lineNumberWidth));
+	const divider = theme.fg('dim', '│ ');
+	return stabilizeBackgroundResets(
+		`  ${number} ${divider}${' '.repeat(codeWidth)}`
+	);
 }
 
 function renderSplitCell(
 	line: DiffLineEntry | undefined,
-	side: "left" | "right",
+	side: 'left' | 'right',
 	columnWidth: number,
 	lineNumberWidth: number,
 	theme: DiffTheme,
@@ -1460,54 +1680,88 @@ function renderSplitCell(
 	palette: DiffPalette,
 	highlightLine: CodeLineHighlighter,
 	containerBgAnsi: string | undefined,
-	wordWrap: boolean,
+	wordWrap: boolean
 ): string[] {
 	if (!line) {
 		return [renderSplitBlankCell(columnWidth, lineNumberWidth, theme)];
 	}
 
-	const lineNumber = formatLineNumber(getCellLineNumber(line, side), line.fallbackLineNumber, lineNumberWidth);
+	const lineNumber = formatLineNumber(
+		getCellLineNumber(line, side),
+		line.fallbackLineNumber,
+		lineNumberWidth
+	);
 	const rowBg = getLineRowBackground(line.lineKind, palette);
 	const emphasisBg = getLineEmphasisBackground(line.lineKind, palette);
 	const codeText = normalizeCodeWhitespace(line.content);
 	const syntaxHighlighted = highlightLine(codeText);
 	const inlineSpans = inlineHighlights.get(line) ?? [];
-	const highlighted = applyInlineSpanHighlight(codeText, syntaxHighlighted, inlineSpans, emphasisBg, rowBg, containerBgAnsi);
-	return renderLineCell(line.lineKind, lineNumber, highlighted, columnWidth, rowBg, containerBgAnsi, theme, wordWrap);
+
+	const highlighted = applyInlineSpanHighlight(
+		codeText,
+		syntaxHighlighted,
+		inlineSpans,
+		emphasisBg,
+		rowBg,
+		containerBgAnsi
+	);
+	return renderLineCell(
+		line.lineKind,
+		lineNumber,
+		highlighted,
+		columnWidth,
+		rowBg,
+		containerBgAnsi,
+		theme,
+		wordWrap
+	);
 }
 
 function renderSplitDivider(
 	theme: DiffTheme,
 	containerBgAnsi: string | undefined,
-	separatorText: string = SPLIT_SEPARATOR,
+	separatorText: string = SPLIT_SEPARATOR
 ): string {
-	const dimAnsi = readThemeAnsi(theme, "fg", "dim");
+	const dimAnsi = readThemeAnsi(theme, 'fg', 'dim');
 	if (!containerBgAnsi) {
-		return stabilizeBackgroundResets(theme.fg("dim", separatorText));
+		return stabilizeBackgroundResets(theme.fg('dim', separatorText));
 	}
 	if (!dimAnsi) {
-		return stabilizeBackgroundResets(`${containerBgAnsi}${theme.fg("dim", separatorText)}${containerBgAnsi}`);
+		return stabilizeBackgroundResets(
+			`${containerBgAnsi}${theme.fg('dim', separatorText)}${containerBgAnsi}`
+		);
 	}
-	return stabilizeBackgroundResets(`${containerBgAnsi}${dimAnsi}${separatorText}\x1b[39m${containerBgAnsi}`);
+	return stabilizeBackgroundResets(
+		`${containerBgAnsi}${dimAnsi}${separatorText}\x1b[39m${containerBgAnsi}`
+	);
 }
 
-function renderSplitTopBorderCell(columnWidth: number, lineNumberWidth: number, theme: DiffTheme): string {
+function renderSplitTopBorderCell(
+	columnWidth: number,
+	lineNumberWidth: number,
+	theme: DiffTheme
+): string {
 	const safeColumnWidth = Math.max(1, columnWidth);
-	const chars = "─".repeat(safeColumnWidth).split("");
+	const chars = '─'.repeat(safeColumnWidth).split('');
 	const dividerIndex = lineNumberWidth + 3;
 	if (dividerIndex >= 0 && dividerIndex < chars.length) {
-		chars[dividerIndex] = "┬";
+		chars[dividerIndex] = '┬';
 	}
-	return stabilizeBackgroundResets(theme.fg("dim", chars.join("")));
+	return stabilizeBackgroundResets(theme.fg('dim', chars.join('')));
 }
 
-function renderSplitHeaderCell(label: string, columnWidth: number, lineNumberWidth: number, theme: DiffTheme): string {
-	const markerPad = "  ";
+function renderSplitHeaderCell(
+	label: string,
+	columnWidth: number,
+	lineNumberWidth: number,
+	theme: DiffTheme
+): string {
+	const markerPad = '  ';
 	const lineNumberLabel = fitToWidth(label, lineNumberWidth);
-	const prefix = `${theme.fg("dim", markerPad)}${theme.fg("muted", lineNumberLabel)}${theme.fg("dim", " │ ")}`;
+	const prefix = `${theme.fg('dim', markerPad)}${theme.fg('muted', lineNumberLabel)}${theme.fg('dim', ' │ ')}`;
 	const prefixWidth = visibleWidth(`${markerPad}${lineNumberLabel} │ `);
 	const codeWidth = Math.max(0, columnWidth - prefixWidth);
-	return stabilizeBackgroundResets(`${prefix}${" ".repeat(codeWidth)}`);
+	return stabilizeBackgroundResets(`${prefix}${' '.repeat(codeWidth)}`);
 }
 
 function canRenderSplitLayout(width: number): boolean {
@@ -1525,26 +1779,42 @@ function renderSplit(
 	palette: DiffPalette,
 	highlightLine: CodeLineHighlighter,
 	containerBgAnsi: string | undefined,
-	wordWrap: boolean,
+	wordWrap: boolean
 ): RenderedRow[] {
 	if (!canRenderSplitLayout(width)) {
-		return toUnifiedFallbackRows(rows, width, theme, lineNumberWidth, inlineHighlights, palette, highlightLine, containerBgAnsi, wordWrap);
+		return toUnifiedFallbackRows(
+			rows,
+			width,
+			theme,
+			lineNumberWidth,
+			inlineHighlights,
+			palette,
+			highlightLine,
+			containerBgAnsi,
+			wordWrap
+		);
 	}
 
 	const separatorWidth = visibleWidth(SPLIT_SEPARATOR);
-	const leftWidth = Math.max(MIN_SPLIT_COLUMN_WIDTH, Math.floor((width - separatorWidth) / 2));
-	const rightWidth = Math.max(MIN_SPLIT_COLUMN_WIDTH, width - separatorWidth - leftWidth);
+	const leftWidth = Math.max(
+		MIN_SPLIT_COLUMN_WIDTH,
+		Math.floor((width - separatorWidth) / 2)
+	);
+	const rightWidth = Math.max(
+		MIN_SPLIT_COLUMN_WIDTH,
+		width - separatorWidth - leftWidth
+	);
 	const splitLineNumberWidth = Math.max(3, lineNumberWidth);
 	const separator = renderSplitDivider(theme, containerBgAnsi);
-	const topSeparator = renderSplitDivider(theme, containerBgAnsi, "─┬─");
+	const topSeparator = renderSplitDivider(theme, containerBgAnsi, '─┬─');
 	const output: RenderedRow[] = [];
 	output.push({
 		text: `${renderSplitTopBorderCell(leftWidth, splitLineNumberWidth, theme)}${topSeparator}${renderSplitTopBorderCell(rightWidth, splitLineNumberWidth, theme)}`,
-		hunkIndex: null,
+		hunkIndex: null
 	});
 	output.push({
-		text: `${renderSplitHeaderCell("old", leftWidth, splitLineNumberWidth, theme)}${separator}${renderSplitHeaderCell("new", rightWidth, splitLineNumberWidth, theme)}`,
-		hunkIndex: null,
+		text: `${renderSplitHeaderCell('old', leftWidth, splitLineNumberWidth, theme)}${separator}${renderSplitHeaderCell('new', rightWidth, splitLineNumberWidth, theme)}`,
+		hunkIndex: null
 	});
 
 	for (const row of rows) {
@@ -1555,7 +1825,7 @@ function renderSplit(
 
 		const leftCells = renderSplitCell(
 			row.left,
-			"left",
+			'left',
 			leftWidth,
 			splitLineNumberWidth,
 			theme,
@@ -1563,11 +1833,11 @@ function renderSplit(
 			palette,
 			highlightLine,
 			containerBgAnsi,
-			wordWrap,
+			wordWrap
 		);
 		const rightCells = renderSplitCell(
 			row.right,
-			"right",
+			'right',
 			rightWidth,
 			splitLineNumberWidth,
 			theme,
@@ -1575,28 +1845,42 @@ function renderSplit(
 			palette,
 			highlightLine,
 			containerBgAnsi,
-			wordWrap,
+			wordWrap
 		);
 
 		const rowCount = Math.max(leftCells.length, rightCells.length);
 		for (let index = 0; index < rowCount; index++) {
-			const leftCell = leftCells[index] ?? renderSplitBlankCell(leftWidth, splitLineNumberWidth, theme);
-			const rightCell = rightCells[index] ?? renderSplitBlankCell(rightWidth, splitLineNumberWidth, theme);
-			output.push({ text: `${leftCell}${separator}${rightCell}`, hunkIndex: row.hunkIndex });
+			const leftCell =
+				leftCells[index] ??
+				renderSplitBlankCell(leftWidth, splitLineNumberWidth, theme);
+			const rightCell =
+				rightCells[index] ??
+				renderSplitBlankCell(rightWidth, splitLineNumberWidth, theme);
+			output.push({
+				text: `${leftCell}${separator}${rightCell}`,
+				hunkIndex: row.hunkIndex
+			});
 		}
 	}
 
 	return output;
 }
 
-function renderDiffStatBar(stats: DiffStats, width: number, theme: DiffTheme): string | null {
+function renderDiffStatBar(
+	stats: DiffStats,
+	width: number,
+	theme: DiffTheme
+): string | null {
 	const totalChanges = stats.added + stats.removed;
 	if (totalChanges === 0 || width < 20) {
 		return null;
 	}
 
 	const barSlots = Math.max(8, Math.min(24, Math.floor(width / 12)));
-	let addedSlots = Math.max(0, Math.min(barSlots, Math.round((stats.added / totalChanges) * barSlots)));
+	let addedSlots = Math.max(
+		0,
+		Math.min(barSlots, Math.round((stats.added / totalChanges) * barSlots))
+	);
 	if (stats.added > 0 && addedSlots === 0) {
 		addedSlots = 1;
 	}
@@ -1605,60 +1889,96 @@ function renderDiffStatBar(stats: DiffStats, width: number, theme: DiffTheme): s
 	}
 	const removedSlots = Math.max(0, barSlots - addedSlots);
 
-	const addedBar = addedSlots > 0 ? theme.fg("toolDiffAdded", "━".repeat(addedSlots)) : "";
-	const removedBar = removedSlots > 0 ? theme.fg("toolDiffRemoved", "━".repeat(removedSlots)) : "";
-	return stabilizeBackgroundResets(`${theme.fg("dim", "[")}${addedBar}${removedBar}${theme.fg("dim", "]")}`);
+	const addedBar =
+		addedSlots > 0 ? theme.fg('toolDiffAdded', '━'.repeat(addedSlots)) : '';
+	const removedBar =
+		removedSlots > 0
+			? theme.fg('toolDiffRemoved', '━'.repeat(removedSlots))
+			: '';
+	return stabilizeBackgroundResets(
+		`${theme.fg('dim', '[')}${addedBar}${removedBar}${theme.fg('dim', ']')}`
+	);
 }
 
-function renderHeaderRows(stats: DiffStats, mode: Exclude<DiffPresentationMode, "summary">, width: number, theme: DiffTheme): RenderedRow[] {
-	if (mode === "compact") {
+function renderHeaderRows(
+	stats: DiffStats,
+	mode: Exclude<DiffPresentationMode, 'summary'>,
+	width: number,
+	theme: DiffTheme
+): RenderedRow[] {
+	if (mode === 'compact') {
 		const summary = [
-			theme.fg("toolOutput", `↳ ${emphasis(theme, "diff")}`),
-			theme.fg("toolDiffAdded", `+${stats.added}`),
-			theme.fg("toolDiffRemoved", `-${stats.removed}`),
-		].join(" ");
-		return [{ text: stabilizeBackgroundResets(truncateToWidth(summary, width)), hunkIndex: null }];
+			theme.fg('toolOutput', `↳ ${emphasis(theme, 'diff')}`),
+			theme.fg('toolDiffAdded', `+${stats.added}`),
+			theme.fg('toolDiffRemoved', `-${stats.removed}`)
+		].join(' ');
+		return [
+			{
+				text: stabilizeBackgroundResets(truncateToWidth(summary, width)),
+				hunkIndex: null
+			}
+		];
 	}
 
-	const summaryPieces = mode === "split"
-		? [
-			theme.fg("toolOutput", `↳ ${emphasis(theme, "diff")}`),
-			theme.fg("toolDiffAdded", `+${stats.added}`),
-			theme.fg("toolDiffRemoved", `-${stats.removed}`),
-			theme.fg("muted", mode),
-		]
-		: [
-			theme.fg("toolOutput", `↳ ${emphasis(theme, "diff")}`),
-			theme.fg("toolDiffAdded", `+${stats.added}`),
-			theme.fg("toolDiffRemoved", `-${stats.removed}`),
-			theme.fg("muted", `${stats.hunks} ${pluralize(stats.hunks, "hunk")}`),
-			theme.fg("muted", `${stats.files} ${pluralize(stats.files, "file")}`),
-			theme.fg("muted", mode),
-		];
+	const summaryPieces =
+		mode === 'split'
+			? [
+					theme.fg('toolOutput', `↳ ${emphasis(theme, 'diff')}`),
+					theme.fg('toolDiffAdded', `+${stats.added}`),
+					theme.fg('toolDiffRemoved', `-${stats.removed}`),
+					theme.fg('muted', mode)
+				]
+			: [
+					theme.fg('toolOutput', `↳ ${emphasis(theme, 'diff')}`),
+					theme.fg('toolDiffAdded', `+${stats.added}`),
+					theme.fg('toolDiffRemoved', `-${stats.removed}`),
+					theme.fg('muted', `${stats.hunks} ${pluralize(stats.hunks, 'hunk')}`),
+					theme.fg('muted', `${stats.files} ${pluralize(stats.files, 'file')}`),
+					theme.fg('muted', mode)
+				];
 
-	const summary = summaryPieces.join(mode === "split" ? " " : theme.fg("muted", " • "));
+	const summary = summaryPieces.join(
+		mode === 'split' ? ' ' : theme.fg('muted', ' • ')
+	);
 	const meter = renderDiffStatBar(stats, width, theme);
 	if (!meter) {
-		return [{ text: stabilizeBackgroundResets(truncateToWidth(summary, width)), hunkIndex: null }];
+		return [
+			{
+				text: stabilizeBackgroundResets(truncateToWidth(summary, width)),
+				hunkIndex: null
+			}
+		];
 	}
 
-	const meterSeparator = " ";
+	const meterSeparator = ' ';
 	const meterWidth = visibleWidth(meterSeparator) + visibleWidth(meter);
 	if (meterWidth >= width) {
-		return [{ text: stabilizeBackgroundResets(truncateToWidth(summary, width)), hunkIndex: null }];
+		return [
+			{
+				text: stabilizeBackgroundResets(truncateToWidth(summary, width)),
+				hunkIndex: null
+			}
+		];
 	}
 
 	const summaryWidth = Math.max(0, width - meterWidth);
 	const fittedSummary = truncateToWidth(summary, summaryWidth);
-	return [{ text: stabilizeBackgroundResets(`${fittedSummary}${meterSeparator}${meter}`), hunkIndex: null }];
+	return [
+		{
+			text: stabilizeBackgroundResets(
+				`${fittedSummary}${meterSeparator}${meter}`
+			),
+			hunkIndex: null
+		}
+	];
 }
 
 function renderDiffFrameLine(width: number, theme: DiffTheme): string {
 	const frameWidth = Math.max(0, width);
 	if (frameWidth === 0) {
-		return "";
+		return '';
 	}
-	return stabilizeBackgroundResets(theme.fg("dim", "─".repeat(frameWidth)));
+	return stabilizeBackgroundResets(theme.fg('dim', '─'.repeat(frameWidth)));
 }
 
 function applyLineLimit(
@@ -1667,7 +1987,7 @@ function applyLineLimit(
 	expanded: boolean,
 	maxCollapsedLines: number,
 	totalHunks: number,
-	theme: DiffTheme,
+	theme: DiffTheme
 ): string[] {
 	if (expanded) {
 		return rows.map((row) => clampDiffLineToWidth(row.text, width));
@@ -1683,42 +2003,49 @@ function applyLineLimit(
 	const visibleHunks = new Set(
 		shown
 			.map((row) => row.hunkIndex)
-			.filter((hunkIndex): hunkIndex is number => typeof hunkIndex === "number" && hunkIndex > 0),
+			.filter(
+				(hunkIndex): hunkIndex is number =>
+					typeof hunkIndex === 'number' && hunkIndex > 0
+			)
 	);
 	const hiddenHunks = Math.max(0, totalHunks - visibleHunks.size);
 	const hintText = buildCollapsedDiffHintText(
 		{
 			remainingLines: remaining,
-			hiddenHunks,
+			hiddenHunks
 		},
 		width,
-		DIFF_WIDTH_OPS,
+		DIFF_WIDTH_OPS
 	);
 
 	return [
 		...shown.map((row) => clampDiffLineToWidth(row.text, width)),
-		clampDiffLineToWidth(theme.fg("muted", hintText), width),
+		clampDiffLineToWidth(theme.fg('muted', hintText), width)
 	];
 }
 
-function collectDiffStats(entries: ParsedDiffEntry[], fallbackHunks = 0, fallbackFiles = 0): DiffStats {
+function collectDiffStats(
+	entries: ParsedDiffEntry[],
+	fallbackHunks = 0,
+	fallbackFiles = 0
+): DiffStats {
 	const stats: DiffStats = {
 		added: 0,
 		removed: 0,
 		context: 0,
 		hunks: fallbackHunks,
 		files: fallbackFiles,
-		lines: entries.length,
+		lines: entries.length
 	};
 
 	const hunkIndexes = new Set<number>();
 	let explicitFileCount = 0;
 
 	for (const entry of entries) {
-		if (entry.kind === "line") {
-			if (entry.lineKind === "add") {
+		if (entry.kind === 'line') {
+			if (entry.lineKind === 'add') {
 				stats.added++;
-			} else if (entry.lineKind === "remove") {
+			} else if (entry.lineKind === 'remove') {
 				stats.removed++;
 			} else {
 				stats.context++;
@@ -1729,10 +2056,10 @@ function collectDiffStats(entries: ParsedDiffEntry[], fallbackHunks = 0, fallbac
 			continue;
 		}
 
-		if (entry.kind === "hunk" && entry.hunkIndex > 0) {
+		if (entry.kind === 'hunk' && entry.hunkIndex > 0) {
 			hunkIndexes.add(entry.hunkIndex);
 		}
-		if (entry.kind === "file") {
+		if (entry.kind === 'file') {
 			explicitFileCount++;
 		}
 	}
@@ -1745,31 +2072,37 @@ function collectDiffStats(entries: ParsedDiffEntry[], fallbackHunks = 0, fallbac
 	} else if (entries.length > 0) {
 		stats.files = Math.max(stats.files, 1);
 	}
-	if (stats.hunks === 0 && entries.some((entry) => entry.kind === "line")) {
+	if (stats.hunks === 0 && entries.some((entry) => entry.kind === 'line')) {
 		stats.hunks = 1;
 	}
 
 	return stats;
 }
 
-function renderSummaryRows(stats: DiffStats, width: number, theme: DiffTheme): string[] {
+function renderSummaryRows(
+	stats: DiffStats,
+	width: number,
+	theme: DiffTheme
+): string[] {
 	if (width <= 0) {
-		return [""];
+		return [''];
 	}
 	return [
 		clampDiffLineToWidth(
-			stabilizeBackgroundResets(theme.fg("toolOutput", buildDiffSummaryText(stats, width))),
-			width,
-		),
+			stabilizeBackgroundResets(
+				theme.fg('toolOutput', buildDiffSummaryText(stats, width))
+			),
+			width
+		)
 	];
 }
 
 function safeGetDiff(details: unknown): string {
-	if (!details || typeof details !== "object") {
-		return "";
+	if (!details || typeof details !== 'object') {
+		return '';
 	}
 	const typed = details as Partial<EditToolDetails>;
-	return typeof typed.diff === "string" ? typed.diff : "";
+	return typeof typed.diff === 'string' ? typed.diff : '';
 }
 
 export function renderEditDiffResult(
@@ -1777,14 +2110,18 @@ export function renderEditDiffResult(
 	options: DiffRenderOptions,
 	config: ToolDisplayConfig,
 	theme: DiffTheme,
-	fallbackText: string,
+	fallbackText: string
 ): Component {
 	const diffText = safeGetDiff(details);
 	if (!diffText.trim()) {
 		if (!fallbackText.trim()) {
-			return new Text(theme.fg("muted", "↳ edit completed (no diff payload)"), 0, 0);
+			return new Text(
+				theme.fg('muted', '↳ edit completed (no diff payload)'),
+				0,
+				0
+			);
 		}
-		return new Text(theme.fg("toolOutput", fallbackText), 0, 0);
+		return new Text(theme.fg('toolOutput', fallbackText), 0, 0);
 	}
 
 	let parsed: ParsedDiff;
@@ -1792,17 +2129,22 @@ export function renderEditDiffResult(
 		parsed = parseDiff(diffText);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		return new Text(theme.fg("warning", `↳ unable to render diff: ${message}`), 0, 0);
+		return new Text(
+			theme.fg('warning', `↳ unable to render diff: ${message}`),
+			0,
+			0
+		);
 	}
 
 	if (parsed.entries.length === 0) {
-		return new Text(theme.fg("muted", "↳ no diff data"), 0, 0);
+		return new Text(theme.fg('muted', '↳ no diff data'), 0, 0);
 	}
 
 	const splitRows = buildSplitRows(parsed.entries);
 	const inlineHighlights = buildInlineHighlightMap(splitRows);
 	const lineNumberWidth = getLineNumberWidth(parsed.entries);
 	const palette = resolveDiffPalette(theme);
+
 	const containerBgAnsi = resolveContainerBackgroundAnsi(theme);
 	const language = resolveLanguageFromPath(options.filePath);
 	const highlightLine = createCodeLineHighlighter(language);
@@ -1816,17 +2158,21 @@ export function renderEditDiffResult(
 	return {
 		render(width: number): string[] {
 			const safeWidth = normalizeDiffRenderWidth(width);
-			const mode = resolveDiffPresentationMode(config, safeWidth, canRenderSplitLayout(safeWidth));
+			const mode = resolveDiffPresentationMode(
+				config,
+				safeWidth,
+				canRenderSplitLayout(safeWidth)
+			);
 			if (
-				cachedLines
-				&& cachedWidth === safeWidth
-				&& cachedExpanded === options.expanded
-				&& cachedMode === mode
+				cachedLines &&
+				cachedWidth === safeWidth &&
+				cachedExpanded === options.expanded &&
+				cachedMode === mode
 			) {
 				return cachedLines;
 			}
 
-			if (mode === "summary") {
+			if (mode === 'summary') {
 				cachedLines = renderSummaryRows(parsed.stats, safeWidth, theme);
 				cachedWidth = safeWidth;
 				cachedExpanded = options.expanded;
@@ -1835,52 +2181,59 @@ export function renderEditDiffResult(
 			}
 
 			const headerRows = renderHeaderRows(parsed.stats, mode, safeWidth, theme);
-			const bodyRows = mode === "split"
-				? renderSplit(
-					splitRows,
-					safeWidth,
-					theme,
-					lineNumberWidth,
-					inlineHighlights,
-					palette,
-					highlightLine,
-					containerBgAnsi,
-					wordWrap,
-				)
-				: mode === "compact"
-					? renderCompact(
-						parsed.entries,
-						safeWidth,
-						theme,
-						inlineHighlights,
-						palette,
-						highlightLine,
-						containerBgAnsi,
-						wordWrap,
-					)
-					: renderUnified(
-						parsed.entries,
-						safeWidth,
-						theme,
-						lineNumberWidth,
-						inlineHighlights,
-						palette,
-						highlightLine,
-						containerBgAnsi,
-						wordWrap,
-					);
+			const bodyRows =
+				mode === 'split'
+					? renderSplit(
+							splitRows,
+							safeWidth,
+							theme,
+							lineNumberWidth,
+							inlineHighlights,
+							palette,
+							highlightLine,
+							containerBgAnsi,
+							wordWrap
+						)
+					: mode === 'compact'
+						? renderCompact(
+								parsed.entries,
+								safeWidth,
+								theme,
+								inlineHighlights,
+								palette,
+								highlightLine,
+								containerBgAnsi,
+								wordWrap
+							)
+						: renderUnified(
+								parsed.entries,
+								safeWidth,
+								theme,
+								lineNumberWidth,
+								inlineHighlights,
+								palette,
+								highlightLine,
+								containerBgAnsi,
+								wordWrap
+							);
 			const bodyWithLimit = applyLineLimit(
 				bodyRows,
 				safeWidth,
 				options.expanded,
 				config.diffCollapsedLines,
 				parsed.stats.hunks,
-				theme,
+				theme
 			);
 			const frame = renderDiffFrameLine(safeWidth, theme);
-			const renderedLines = mode === "unified"
-				? [...headerRows.map((row) => row.text), frame, ...bodyWithLimit, frame]
-				: [...headerRows.map((row) => row.text), ...bodyWithLimit];
+			const renderedLines =
+				mode === 'unified'
+					? [
+							...headerRows.map((row) => row.text),
+							frame,
+							...bodyWithLimit,
+							frame
+						]
+					: [...headerRows.map((row) => row.text), ...bodyWithLimit];
 
 			cachedLines = clampDiffLinesToWidth(renderedLines, safeWidth);
 			cachedWidth = safeWidth;
@@ -1893,7 +2246,7 @@ export function renderEditDiffResult(
 			cachedExpanded = undefined;
 			cachedMode = undefined;
 			cachedLines = undefined;
-		},
+		}
 	};
 }
 
@@ -1902,9 +2255,9 @@ function splitWriteContentLines(content: string): string[] {
 		return [];
 	}
 
-	const normalized = content.replace(/\r/g, "");
-	const lines = normalized.split("\n");
-	if (lines.length > 0 && lines[lines.length - 1] === "") {
+	const normalized = content.replace(/\r/g, '');
+	const lines = normalized.split('\n');
+	if (lines.length > 0 && lines[lines.length - 1] === '') {
 		lines.pop();
 	}
 	return lines;
@@ -1913,30 +2266,39 @@ function splitWriteContentLines(content: string): string[] {
 function renderWriteHeader(
 	wasOverwrite: boolean,
 	width: number,
-	theme: DiffTheme,
+	theme: DiffTheme
 ): string {
-	const actionLabel = wasOverwrite ? "overwritten" : "created";
+	const actionLabel = wasOverwrite ? 'overwritten' : 'created';
 	return stabilizeBackgroundResets(
-		truncateToWidth(theme.fg("toolOutput", `↳ ${emphasis(theme, actionLabel)}`), width),
+		truncateToWidth(
+			theme.fg('toolOutput', `↳ ${emphasis(theme, actionLabel)}`),
+			width
+		)
 	);
 }
 
-type WriteDiffOperationKind = "context" | "remove" | "add";
+type WriteDiffOperationKind = 'context' | 'remove' | 'add';
 
 interface WriteDiffOperation {
 	kind: WriteDiffOperationKind;
 	content: string;
 }
 
-function buildWriteDiffOperations(oldLines: string[], newLines: string[]): WriteDiffOperation[] {
+function buildWriteDiffOperations(
+	oldLines: string[],
+	newLines: string[]
+): WriteDiffOperation[] {
 	const oldLength = oldLines.length;
 	const newLength = newLines.length;
-	const table: number[][] = Array.from({ length: oldLength + 1 }, () => Array<number>(newLength + 1).fill(0));
+	const table: number[][] = Array.from({ length: oldLength + 1 }, () =>
+		Array<number>(newLength + 1).fill(0)
+	);
 
 	for (let oldIndex = 1; oldIndex <= oldLength; oldIndex++) {
 		for (let newIndex = 1; newIndex <= newLength; newIndex++) {
-			if ((oldLines[oldIndex - 1] ?? "") === (newLines[newIndex - 1] ?? "")) {
-				table[oldIndex]![newIndex] = (table[oldIndex - 1]?.[newIndex - 1] ?? 0) + 1;
+			if ((oldLines[oldIndex - 1] ?? '') === (newLines[newIndex - 1] ?? '')) {
+				table[oldIndex]![newIndex] =
+					(table[oldIndex - 1]?.[newIndex - 1] ?? 0) + 1;
 				continue;
 			}
 			const top = table[oldIndex - 1]?.[newIndex] ?? 0;
@@ -1950,11 +2312,11 @@ function buildWriteDiffOperations(oldLines: string[], newLines: string[]): Write
 	let newCursor = newLength;
 
 	while (oldCursor > 0 || newCursor > 0) {
-		const oldLine = oldCursor > 0 ? (oldLines[oldCursor - 1] ?? "") : undefined;
-		const newLine = newCursor > 0 ? (newLines[newCursor - 1] ?? "") : undefined;
+		const oldLine = oldCursor > 0 ? (oldLines[oldCursor - 1] ?? '') : undefined;
+		const newLine = newCursor > 0 ? (newLines[newCursor - 1] ?? '') : undefined;
 
 		if (oldCursor > 0 && newCursor > 0 && oldLine === newLine) {
-			operations.push({ kind: "context", content: oldLine ?? "" });
+			operations.push({ kind: 'context', content: oldLine ?? '' });
 			oldCursor--;
 			newCursor--;
 			continue;
@@ -1964,13 +2326,13 @@ function buildWriteDiffOperations(oldLines: string[], newLines: string[]): Write
 		const left = newCursor > 0 ? (table[oldCursor]?.[newCursor - 1] ?? 0) : -1;
 
 		if (newCursor > 0 && left >= top) {
-			operations.push({ kind: "add", content: newLine ?? "" });
+			operations.push({ kind: 'add', content: newLine ?? '' });
 			newCursor--;
 			continue;
 		}
 
 		if (oldCursor > 0) {
-			operations.push({ kind: "remove", content: oldLine ?? "" });
+			operations.push({ kind: 'remove', content: oldLine ?? '' });
 			oldCursor--;
 		}
 	}
@@ -1981,64 +2343,67 @@ function buildWriteDiffOperations(oldLines: string[], newLines: string[]): Write
 
 function buildWriteEntries(lines: string[]): ParsedDiffEntry[] {
 	return lines.map((line, index) => ({
-		kind: "line",
-		lineKind: "add",
+		kind: 'line',
+		lineKind: 'add',
 		oldLineNumber: null,
 		newLineNumber: index + 1,
 		fallbackLineNumber: `${index + 1}`,
 		content: line,
 		raw: `+${line}`,
-		hunkIndex: 1,
+		hunkIndex: 1
 	}));
 }
 
-function buildWriteOverwriteEntries(oldLines: string[], newLines: string[]): ParsedDiffEntry[] {
+function buildWriteOverwriteEntries(
+	oldLines: string[],
+	newLines: string[]
+): ParsedDiffEntry[] {
 	const operations = buildWriteDiffOperations(oldLines, newLines);
 	const entries: ParsedDiffEntry[] = [];
 	let oldLineNumber = 1;
 	let newLineNumber = 1;
 
 	for (const operation of operations) {
-		if (operation.kind === "context") {
+		if (operation.kind === 'context') {
 			entries.push({
-				kind: "line",
-				lineKind: "context",
+				kind: 'line',
+				lineKind: 'context',
 				oldLineNumber,
 				newLineNumber,
 				fallbackLineNumber: `${newLineNumber}`,
 				content: operation.content,
 				raw: ` ${operation.content}`,
-				hunkIndex: 1,
+				hunkIndex: 1
 			});
 			oldLineNumber++;
 			newLineNumber++;
 			continue;
 		}
 
-		if (operation.kind === "remove") {
+		if (operation.kind === 'remove') {
 			entries.push({
-				kind: "line",
-				lineKind: "remove",
+				kind: 'line',
+				lineKind: 'remove',
 				oldLineNumber,
 				newLineNumber: null,
 				fallbackLineNumber: `${oldLineNumber}`,
 				content: operation.content,
 				raw: `-${operation.content}`,
-				hunkIndex: 1,
+				hunkIndex: 1
 			});
 			oldLineNumber++;
 			continue;
 		}
 
 		entries.push({
-			kind: "line",
-			lineKind: "add",
+			kind: 'line',
+			lineKind: 'add',
 			oldLineNumber: null,
 			newLineNumber,
 			fallbackLineNumber: `${newLineNumber}`,
 			content: operation.content,
 			raw: `+${operation.content}`,
-			hunkIndex: 1,
+			hunkIndex: 1
 		});
 		newLineNumber++;
 	}
@@ -2066,7 +2431,7 @@ const MAX_WRITE_OVERWRITE_DIFF_MATRIX_CELLS = 1_000_000;
 function buildApproximateWriteStats(
 	lineCount: number,
 	previousLineCount: number,
-	hasComparablePrevious: boolean,
+	hasComparablePrevious: boolean
 ): DiffStats {
 	const removed = hasComparablePrevious ? previousLineCount : 0;
 	const added = lineCount;
@@ -2077,7 +2442,7 @@ function buildApproximateWriteStats(
 		context: 0,
 		hunks: hasContent ? 1 : 0,
 		files: 1,
-		lines: added + removed,
+		lines: added + removed
 	};
 }
 
@@ -2093,61 +2458,74 @@ function buildWriteDiffData(entries: ParsedDiffEntry[]): WriteDiffData {
 		inlineHighlights,
 		lineNumberWidth,
 		stats,
-		hunkCount,
+		hunkCount
 	};
 }
 
 function resolveWriteOverwriteGuard(
 	previousLines: string[],
-	nextLines: string[],
+	nextLines: string[]
 ): WriteOverwriteGuard | undefined {
 	const previousLineCount = previousLines.length;
 	const nextLineCount = nextLines.length;
-	if (previousLineCount > MAX_WRITE_OVERWRITE_DIFF_LINES || nextLineCount > MAX_WRITE_OVERWRITE_DIFF_LINES) {
+	if (
+		previousLineCount > MAX_WRITE_OVERWRITE_DIFF_LINES ||
+		nextLineCount > MAX_WRITE_OVERWRITE_DIFF_LINES
+	) {
 		return { previousLineCount, nextLineCount };
 	}
 	if (previousLineCount === 0 || nextLineCount === 0) {
 		return undefined;
 	}
-	return previousLineCount * nextLineCount > MAX_WRITE_OVERWRITE_DIFF_MATRIX_CELLS
+	return previousLineCount * nextLineCount >
+		MAX_WRITE_OVERWRITE_DIFF_MATRIX_CELLS
 		? { previousLineCount, nextLineCount }
 		: undefined;
 }
 
-function buildWriteOverwriteGuardText(guard: WriteOverwriteGuard, width: number): string {
+function buildWriteOverwriteGuardText(
+	guard: WriteOverwriteGuard,
+	width: number
+): string {
 	const safeWidth = normalizeDiffRenderWidth(width);
 	if (safeWidth === 0) {
-		return "";
+		return '';
 	}
 
 	const candidates = [
 		`↳ overwrite diff omitted (${guard.previousLineCount} → ${guard.nextLineCount} lines)`,
 		`↳ overwrite diff omitted (${guard.previousLineCount}→${guard.nextLineCount})`,
-		"↳ overwrite diff omitted",
-		"diff omitted",
-		"…",
+		'↳ overwrite diff omitted',
+		'diff omitted',
+		'…'
 	];
 	for (const candidate of candidates) {
 		if (visibleWidth(candidate) <= safeWidth) {
 			return candidate;
 		}
 	}
-	return truncateToWidth(candidates[candidates.length - 1] ?? "", safeWidth, "");
+	return truncateToWidth(
+		candidates[candidates.length - 1] ?? '',
+		safeWidth,
+		''
+	);
 }
 
 function renderWriteOverwriteGuardRows(
 	guard: WriteOverwriteGuard,
 	width: number,
-	theme: DiffTheme,
+	theme: DiffTheme
 ): string[] {
 	if (width <= 0) {
-		return [""];
+		return [''];
 	}
 	return [
 		clampDiffLineToWidth(
-			stabilizeBackgroundResets(theme.fg("warning", buildWriteOverwriteGuardText(guard, width))),
-			width,
-		),
+			stabilizeBackgroundResets(
+				theme.fg('warning', buildWriteOverwriteGuardText(guard, width))
+			),
+			width
+		)
 	];
 }
 
@@ -2156,25 +2534,28 @@ export function renderWriteDiffResult(
 	options: DiffRenderOptions,
 	config: ToolDisplayConfig,
 	theme: DiffTheme,
-	fallbackText: string,
+	fallbackText: string
 ): Component {
-	if (typeof content !== "string") {
+	if (typeof content !== 'string') {
 		if (!fallbackText.trim()) {
-			return new Text(theme.fg("muted", "↳ write completed"), 0, 0);
+			return new Text(theme.fg('muted', '↳ write completed'), 0, 0);
 		}
-		return new Text(theme.fg("toolOutput", fallbackText), 0, 0);
+		return new Text(theme.fg('toolOutput', fallbackText), 0, 0);
 	}
 
-	const filePath = options.filePath?.trim() || "(unknown path)";
+	const filePath = options.filePath?.trim() || '(unknown path)';
 	const lines = splitWriteContentLines(content);
-	const previousLines = typeof options.previousContent === "string"
-		? splitWriteContentLines(options.previousContent)
-		: [];
-	const hasComparablePrevious = options.fileExistedBeforeWrite === true && typeof options.previousContent === "string";
+	const previousLines =
+		typeof options.previousContent === 'string'
+			? splitWriteContentLines(options.previousContent)
+			: [];
+	const hasComparablePrevious =
+		options.fileExistedBeforeWrite === true &&
+		typeof options.previousContent === 'string';
 	const approximateStats = buildApproximateWriteStats(
 		lines.length,
 		previousLines.length,
-		hasComparablePrevious,
+		hasComparablePrevious
 	);
 	const overwriteGuard = hasComparablePrevious
 		? resolveWriteOverwriteGuard(previousLines, lines)
@@ -2205,17 +2586,21 @@ export function renderWriteDiffResult(
 	return {
 		render(width: number): string[] {
 			const safeWidth = normalizeDiffRenderWidth(width);
-			const resolvedMode = resolveDiffPresentationMode(config, safeWidth, canRenderSplitLayout(safeWidth));
+			const resolvedMode = resolveDiffPresentationMode(
+				config,
+				safeWidth,
+				canRenderSplitLayout(safeWidth)
+			);
 			const mode: DiffPresentationMode = hasComparablePrevious
 				? resolvedMode
-				: resolvedMode === "split"
-					? "unified"
+				: resolvedMode === 'split'
+					? 'unified'
 					: resolvedMode;
 			if (
-				cachedLines
-				&& cachedWidth === safeWidth
-				&& cachedExpanded === options.expanded
-				&& cachedMode === mode
+				cachedLines &&
+				cachedWidth === safeWidth &&
+				cachedExpanded === options.expanded &&
+				cachedMode === mode
 			) {
 				return cachedLines;
 			}
@@ -2223,12 +2608,15 @@ export function renderWriteDiffResult(
 			const header = renderWriteHeader(
 				options.fileExistedBeforeWrite === true,
 				safeWidth,
-				theme,
+				theme
 			);
 			if (overwriteGuard) {
 				cachedLines = clampDiffLinesToWidth(
-					[header, ...renderWriteOverwriteGuardRows(overwriteGuard, safeWidth, theme)],
-					safeWidth,
+					[
+						header,
+						...renderWriteOverwriteGuardRows(overwriteGuard, safeWidth, theme)
+					],
+					safeWidth
 				);
 				cachedWidth = safeWidth;
 				cachedExpanded = options.expanded;
@@ -2236,10 +2624,14 @@ export function renderWriteDiffResult(
 				return cachedLines;
 			}
 
-			if (mode === "summary") {
-				const summaryRows = approximateStats.lines === 0
-					? [header]
-					: [header, ...renderSummaryRows(approximateStats, safeWidth, theme)];
+			if (mode === 'summary') {
+				const summaryRows =
+					approximateStats.lines === 0
+						? [header]
+						: [
+								header,
+								...renderSummaryRows(approximateStats, safeWidth, theme)
+							];
 				cachedLines = clampDiffLinesToWidth(summaryRows, safeWidth);
 				cachedWidth = safeWidth;
 				cachedExpanded = options.expanded;
@@ -2248,42 +2640,43 @@ export function renderWriteDiffResult(
 			}
 
 			const data = getDetailedData();
-			const bodyRows: RenderedRow[] = data.entries.length === 0
-				? [{ text: theme.fg("muted", "(empty file)"), hunkIndex: null }]
-				: mode === "split"
-					? renderSplit(
-						data.splitRows,
-						safeWidth,
-						theme,
-						data.lineNumberWidth,
-						data.inlineHighlights,
-						palette,
-						highlightLine,
-						containerBgAnsi,
-						wordWrap,
-					)
-					: mode === "compact"
-						? renderCompact(
-							data.entries,
-							safeWidth,
-							theme,
-							data.inlineHighlights,
-							palette,
-							highlightLine,
-							containerBgAnsi,
-							wordWrap,
-						)
-						: renderUnified(
-							data.entries,
-							safeWidth,
-							theme,
-							data.lineNumberWidth,
-							data.inlineHighlights,
-							palette,
-							highlightLine,
-							containerBgAnsi,
-							wordWrap,
-						);
+			const bodyRows: RenderedRow[] =
+				data.entries.length === 0
+					? [{ text: theme.fg('muted', '(empty file)'), hunkIndex: null }]
+					: mode === 'split'
+						? renderSplit(
+								data.splitRows,
+								safeWidth,
+								theme,
+								data.lineNumberWidth,
+								data.inlineHighlights,
+								palette,
+								highlightLine,
+								containerBgAnsi,
+								wordWrap
+							)
+						: mode === 'compact'
+							? renderCompact(
+									data.entries,
+									safeWidth,
+									theme,
+									data.inlineHighlights,
+									palette,
+									highlightLine,
+									containerBgAnsi,
+									wordWrap
+								)
+							: renderUnified(
+									data.entries,
+									safeWidth,
+									theme,
+									data.lineNumberWidth,
+									data.inlineHighlights,
+									palette,
+									highlightLine,
+									containerBgAnsi,
+									wordWrap
+								);
 
 			const bodyWithLimit = applyLineLimit(
 				bodyRows,
@@ -2291,12 +2684,13 @@ export function renderWriteDiffResult(
 				options.expanded,
 				config.diffCollapsedLines,
 				data.hunkCount,
-				theme,
+				theme
 			);
 			const frame = renderDiffFrameLine(safeWidth, theme);
-			const renderedLines = mode === "unified"
-				? [header, frame, ...bodyWithLimit, frame]
-				: [header, ...bodyWithLimit];
+			const renderedLines =
+				mode === 'unified'
+					? [header, frame, ...bodyWithLimit, frame]
+					: [header, ...bodyWithLimit];
 			cachedLines = clampDiffLinesToWidth(renderedLines, safeWidth);
 			cachedWidth = safeWidth;
 			cachedExpanded = options.expanded;
@@ -2308,6 +2702,6 @@ export function renderWriteDiffResult(
 			cachedExpanded = undefined;
 			cachedMode = undefined;
 			cachedLines = undefined;
-		},
+		}
 	};
 }
